@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   routine_id BIGINT REFERENCES routines(id) ON DELETE SET NULL,
   routine_date DATE,
   assignee_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  helper_ids BIGINT[] DEFAULT '{}',
   estimated_minutes INTEGER NOT NULL DEFAULT 30,
   status TEXT NOT NULL DEFAULT 'sin_iniciar' CHECK (status IN ('sin_iniciar', 'en_progreso', 'terminada', 'faltante')),
   priority TEXT NOT NULL DEFAULT 'media' CHECK (priority IN ('baja', 'media', 'alta')),
@@ -75,10 +76,14 @@ CREATE TABLE IF NOT EXISTS tasks (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
+-- Si la tabla tasks ya fue creada previamente, añadir la columna helper_ids:
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS helper_ids BIGINT[] DEFAULT '{}';
+
 CREATE UNIQUE INDEX IF NOT EXISTS ux_tasks_routine_day
   ON tasks(routine_id, routine_date) WHERE routine_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_tasks_assignee ON tasks(assignee_id);
 CREATE INDEX IF NOT EXISTS ix_tasks_objective ON tasks(objective_id);
+
 
 -- 5. TABLA DE ACTIVIDAD (Bitácora / Auditoría)
 CREATE TABLE IF NOT EXISTS activity (
