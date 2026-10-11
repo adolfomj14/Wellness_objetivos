@@ -92,8 +92,18 @@ function getBogotaParts(d = new Date()) {
 
 function parseLocal(s) {
   if (!s) return null;
-  // Si viene en formato ISO o YYYY-MM-DD
-  const d = new Date(s.length === 10 ? s + 'T00:00:00-05:00' : (s.includes('Z') || s.includes('+') || s.includes('-') && s.length > 19 ? s : s + '-05:00'));
+  if (s instanceof Date) return isNaN(s) ? null : s;
+  s = String(s).trim();
+  // Solo fecha YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    return new Date(s + 'T00:00:00-05:00');
+  }
+  // Fecha sin zona horaria explícita YYYY-MM-DDTHH:mm o YYYY-MM-DDTHH:mm:ss
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(s)) {
+    return new Date(s + '-05:00');
+  }
+  // Si ya tiene Z o offset (+/-HH:mm)
+  const d = new Date(s);
   return isNaN(d) ? null : d;
 }
 
@@ -164,7 +174,7 @@ function fmtDate(s) {
 }
 function fmtDateTime(s) {
   const d = parseLocal(s);
-  return d ? d.toLocaleString('es-CO', { timeZone: TIMEZONE, day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
+  return d ? d.toLocaleString('es-CO', { timeZone: TIMEZONE, day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true }) : '—';
 }
 
 /* ---------- Selectores ---------- */
@@ -177,7 +187,7 @@ const activeObjectives = () => state.objectives.filter((o) => o.active);
 const isAdmin = () => state.me && state.me.role === 'admin';
 const isLead = () => state.me && (state.me.role === 'admin' || state.me.role === 'lider');
 const isOpen = (t) => t.status !== 'terminada';
-const doneToday = (t) => t.status === 'terminada' && (t.completed_at ? dateStr(new Date(t.completed_at)) === todayStr() : false);
+const doneToday = (t) => t.status === 'terminada' && (t.completed_at ? dateStr(parseLocal(t.completed_at)) === todayStr() : false);
 
 // Funciones para ayudantes
 const getHelperIds = (t) => Array.isArray(t.helper_ids) ? t.helper_ids.map(Number) : [];
@@ -192,12 +202,12 @@ const canHideTask = (t) => canEditTask(t);
 function urgency(t) {
   if (t.status === 'terminada') {
     let label = 'Terminada';
-    if (t.completed_at) label += ' ' + fmtDue(t.completed_at.slice(0, 16)).toLowerCase();
+    if (t.completed_at) label += ' ' + fmtDue(t.completed_at).toLowerCase();
     return { level: 'done', label, ts: Infinity };
   }
   const d = parseLocal(t.due_at);
   if (!d) return { level: 'none', label: 'Sin fecha límite', ts: Infinity };
-  const ms = d - Date.now();
+  const ms = d.getTime() - Date.now();
   const needMs = (t.status === 'en_progreso' ? 0.5 : 1) * (t.estimated_minutes || 0) * 60000;
   let level, label;
   if (ms < 0) { level = 'overdue'; label = `Vencida ${fmtRel(ms)}`; }
@@ -208,6 +218,7 @@ function urgency(t) {
   else { level = 'ok'; label = `A tiempo · vence ${fmtRel(ms)}`; }
   return { level, label, ts: d.getTime() };
 }
+
 
 function sortTasks(list) {
   return [...list].sort((a, b) => {
@@ -516,9 +527,14 @@ function taskCard(t) {
 
   let real = '';
   if (t.status === 'terminada' && t.started_at && t.completed_at) {
-    const mins = (parseLocal(t.completed_at.slice(0, 16)) - parseLocal(t.started_at.slice(0, 16))) / 60000;
-    if (mins >= 0) real = `<span title="Tiempo real">${ICON.timer} real ${fmtMinutes(mins)}</span>`;
+    const startD = parseLocal(t.started_at);
+    const compD = parseLocal(t.completed_at);
+    if (startD && compD) {
+      const mins = (compD.getTime() - startD.getTime()) / 60000;
+      if (mins >= 0) real = `<span title="Tiempo real">${ICON.timer} real ${fmtMinutes(mins)}</span>`;
+    }
   }
+
 
   // Renderizar ayudantes
   const helpersHtml = helpers.length ? `
@@ -616,7 +632,8 @@ function viewBoard() {
   const f = state.filters;
   const all = activeTasks();
   const weekAgo = Date.now() - 7 * 864e5;
-  let list = all.filter((t) => isOpen(t) || (parseLocal((t.completed_at || '').slice(0, 16)) || 0) >= weekAgo);
+  let list = all.filter((t) => isOpen(t) || (parseLocal(t.completed_at) || 0) >= weekAgo);
+
   if (f.person === 'none') list = list.filter((t) => !t.assignee_id && !getHelperIds(t).length);
   else if (f.person) list = list.filter((t) => isAssignedOrHelper(t, Number(f.person)));
   if (f.objective) list = list.filter((t) => String(t.objective_id) === f.objective);
@@ -744,7 +761,7 @@ function viewActivity() {
   const f = state.filters;
   const items = state.activity.map((a) => `
     <div class="feed-item"><span class="avatar sm">${esc(initials(a.user_name))}</span>
-      <div class="f-body"><b>${esc(a.user_name)}</b> ${esc(lowerFirst(a.summary))}<time>${fmtDateTime(a.created_at.slice(0, 16))}</time></div></div>`).join('');
+      <div class="f-body"><b>${esc(a.user_name)}</b> ${esc(lowerFirst(a.summary))}<time>${fmtDateTime(a.created_at)}</time></div></div>`).join('');
   return `
   <div class="page-head"><div><h1>Actividad</h1><p class="muted" style="margin:4px 0 0">Auditoría completa de movimientos.</p></div></div>
   <div class="filters"><select data-filter="activityUser"><option value="">Todas las personas</option>
@@ -785,7 +802,7 @@ function viewUsers() {
       actions = `<button class="btn btn-sm ${u.active ? 'btn-ghost' : 'btn-success'}" data-action="user-toggle" data-id="${u.id}">${u.active ? 'Desactivar' : 'Reactivar'}</button>`;
     }
     return `<div class="user-row ${u.active ? '' : 'off'}"><span class="avatar">${esc(initials(u.name))}</span>
-      <div class="u-body"><b>${esc(u.name)}${self ? ' (tú)' : ''}</b><div class="small muted">${isAdmin() ? '' : `<span class="pill role-${u.role}">${ROLE[u.role]}</span> `}${u.active ? `Último ingreso: ${u.last_login ? fmtDateTime(u.last_login.slice(0, 16)) : '—'}` : 'Desactivado'}</div></div>
+      <div class="u-body"><b>${esc(u.name)}${self ? ' (tú)' : ''}</b><div class="small muted">${isAdmin() ? '' : `<span class="pill role-${u.role}">${ROLE[u.role]}</span> `}${u.active ? `Último ingreso: ${u.last_login ? fmtDateTime(u.last_login) : '—'}` : 'Desactivado'}</div></div>
       <div class="u-actions">${actions}</div></div>`;
   }).join('');
   return `
@@ -800,7 +817,7 @@ function viewTrash() {
   const routines = isLead() ? state.routines.filter((r) => !r.active) : [];
   const row = (kind, item) => `
     <div class="user-row"><div class="u-body"><b>${esc(item.title)}</b>
-      <div class="small muted">Oculto por ${esc(userName(item.hidden_by))} · ${fmtDateTime((item.hidden_at || '').slice(0, 16))}</div></div>
+      <div class="small muted">Oculto por ${esc(userName(item.hidden_by))} · ${fmtDateTime(item.hidden_at)}</div></div>
       <div class="u-actions"><button class="btn btn-sm btn-success" data-action="restore" data-kind="${kind}" data-id="${item.id}">Restaurar</button>
       ${isAdmin() ? `<button class="btn btn-sm btn-danger" data-action="hard-delete" data-kind="${kind}" data-id="${item.id}">${ICON.trash} Eliminar</button>` : ''}</div></div>`;
   const block = (title, kind, list) => `<div class="section"><div class="section-head"><h2>${title} <span class="count">${list.length}</span></h2></div>
@@ -810,6 +827,7 @@ function viewTrash() {
   ${block('Tareas', 'tasks', tasks)}
   ${isLead() ? block('Objetivos', 'objectives', objs) + block('Rutinas diarias', 'routines', routines) : ''}`;
 }
+
 
 function viewGuide() {
   return `
