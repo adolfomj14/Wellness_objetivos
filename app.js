@@ -46,6 +46,9 @@ const ICON = {
   eyeOff: '<svg viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c6 0 10 7 10 7a17 17 0 0 1-3 3.7M6.6 6.6C3.9 8.3 2 12 2 12s4 7 10 7a9.6 9.6 0 0 0 4.4-1"/></svg>',
   logout: '<svg viewBox="0 0 24 24"><path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4M10 17l-5-5 5-5M5 12h11"/></svg>',
   book: '<svg viewBox="0 0 24 24"><path d="M4 4h6a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H4zM20 4h-6a3 3 0 0 0-1 .2"/><path d="M20 4v14h-7"/></svg>',
+  chevronDown: '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>',
+  chevronUp: '<svg viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>',
+  checkCircle: '<svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
 };
 
 /* ---------- Estado local ---------- */
@@ -56,6 +59,8 @@ const state = {
   more: 'menu',
   filters: { person: '', objective: '', status: 'sin_iniciar', activityUser: '' },
   sheetOpen: false,
+  showAllDoneToday: false,
+  boardDoneFilter: 'recientes', // 'recientes' (últimas 5 o de hoy) | 'semana' (últimos 7 días) | 'todas'
 };
 
 /* ---------- Utilidades ---------- */
@@ -202,7 +207,13 @@ const canHideTask = (t) => canEditTask(t);
 function urgency(t) {
   if (t.status === 'terminada') {
     let label = 'Terminada';
-    if (t.completed_at) label += ' ' + fmtDue(t.completed_at).toLowerCase();
+    if (t.completed_by) {
+      const finisherName = userName(t.completed_by);
+      label += ` por ${finisherName}`;
+    }
+    if (t.completed_at) {
+      label += ' ' + fmtDue(t.completed_at).toLowerCase();
+    }
     return { level: 'done', label, ts: Infinity };
   }
   const d = parseLocal(t.due_at);
@@ -222,6 +233,12 @@ function urgency(t) {
 
 function sortTasks(list) {
   return [...list].sort((a, b) => {
+    // Si ambas están terminadas, mostrar las terminadas más recientemente primero
+    if (a.status === 'terminada' && b.status === 'terminada') {
+      const ta = parseLocal(a.completed_at) ? parseLocal(a.completed_at).getTime() : 0;
+      const tb = parseLocal(b.completed_at) ? parseLocal(b.completed_at).getTime() : 0;
+      return tb - ta;
+    }
     const ua = urgency(a), ub = urgency(b);
     return URG_RANK[ua.level] - URG_RANK[ub.level]
       || PRIO_RANK[a.priority] - PRIO_RANK[b.priority]
@@ -586,7 +603,7 @@ function viewToday() {
   const all = activeTasks();
   const mine = sortTasks(all.filter((t) => isAssignedOrHelper(t, me) && isOpen(t)));
   const free = sortTasks(all.filter((t) => !t.assignee_id && isOpen(t)));
-  const done = all.filter((t) => isAssignedOrHelper(t, me) && doneToday(t));
+  const doneAll = sortTasks(all.filter((t) => isAssignedOrHelper(t, me) && doneToday(t)));
   const today = todayStr();
   const dueToday = mine.filter((t) => !t.due_at || dateStr(parseLocal(t.due_at)) <= today);
   const loadMin = dueToday.reduce((s, t) => s + (t.estimated_minutes || 0) * (t.status === 'en_progreso' ? 0.5 : 1), 0);
@@ -597,13 +614,37 @@ function viewToday() {
   const hello = hour < 12 ? 'Buenos días' : hour < 19 ? 'Buenas tardes' : 'Buenas noches';
   const dateLabel = new Date().toLocaleDateString('es-CO', { timeZone: TIMEZONE, weekday: 'long', day: 'numeric', month: 'long' });
 
+  // Paginación / colapso de terminadas hoy para no saturar la vista
+  const DONE_LIMIT = 4;
+  const hasManyDone = doneAll.length > DONE_LIMIT;
+  const visibleDone = (hasManyDone && !state.showAllDoneToday)
+    ? doneAll.slice(0, DONE_LIMIT)
+    : doneAll;
+
+  let doneSectionHtml = '';
+  if (!doneAll.length) {
+    doneSectionHtml = `<div class="empty">Aún no terminas tareas hoy. ¡Vamos! 💪</div>`;
+  } else {
+    doneSectionHtml = `
+      <div class="list">${visibleDone.map(taskCard).join('')}</div>
+      ${hasManyDone ? `
+        <div class="expand-done-row">
+          <button class="btn btn-ghost btn-sm expand-done-btn" data-action="toggle-done-today">
+            ${state.showAllDoneToday
+              ? `${ICON.chevronUp} Ver menos (mostrando las ${doneAll.length})`
+              : `${ICON.chevronDown} Ver ${doneAll.length - DONE_LIMIT} anteriores de hoy`}
+          </button>
+        </div>` : ''}
+    `;
+  }
+
   return `
   <div class="page-head"><div><h1>${hello}, ${esc(state.me.name.split(' ')[0])}</h1><p class="muted" style="margin:4px 0 0;text-transform:capitalize">${dateLabel}</p></div></div>
   <div class="stats">
     <div class="stat"><b>${mine.length}</b><span>Mis tareas / apoyo</span></div>
     <div class="stat ${urgent ? 'alert' : ''}"><b>${urgent}</b><span>Urgentes / vencidas</span></div>
     <div class="stat"><b>${fmtMinutes(mine.reduce((s, t) => s + (t.estimated_minutes || 0), 0))}</b><span>Tiempo estimado total</span></div>
-    <div class="stat good"><b>${done.length}</b><span>Terminadas hoy</span></div>
+    <div class="stat good"><b>${doneAll.length}</b><span>Terminadas hoy</span></div>
   </div>
   <div class="card load">
     <div class="row" style="justify-content:space-between"><b>Mi carga para hoy</b><span class="muted small">${fmtMinutes(loadMin)} de ${fmtMinutes(SHIFT_MINUTES)}</span></div>
@@ -621,8 +662,8 @@ function viewToday() {
     <div>
       <div class="section"><div class="section-head"><h2>Disponibles para tomar <span class="count">${free.length}</span></h2></div>
         ${taskList(free, 'No hay tareas libres en este momento.')}</div>
-      <div class="section"><div class="section-head"><h2>Terminadas hoy <span class="count">${done.length}</span></h2></div>
-        ${taskList(done, 'Aún no terminas tareas hoy. ¡Vamos! 💪')}</div>
+      <div class="section"><div class="section-head"><h2>Terminadas hoy <span class="count">${doneAll.length}</span></h2></div>
+        ${doneSectionHtml}</div>
     </div>
   </div>`;
 }
@@ -631,8 +672,7 @@ function viewToday() {
 function viewBoard() {
   const f = state.filters;
   const all = activeTasks();
-  const weekAgo = Date.now() - 7 * 864e5;
-  let list = all.filter((t) => isOpen(t) || (parseLocal(t.completed_at) || 0) >= weekAgo);
+  let list = all.filter((t) => isOpen(t) || t.status === 'terminada');
 
   if (f.person === 'none') list = list.filter((t) => !t.assignee_id && !getHelperIds(t).length);
   else if (f.person) list = list.filter((t) => isAssignedOrHelper(t, Number(f.person)));
@@ -669,14 +709,62 @@ function viewBoard() {
     </div>`).join('');
   const freeCount = all.filter((t) => !t.assignee_id && isOpen(t)).length;
 
+  // Filtrado organizado para la columna de terminadas
+  const allDoneItems = sortTasks(list.filter((t) => t.status === 'terminada'));
+  const weekAgo = Date.now() - 7 * 864e5;
+
+  let visibleDoneItems = allDoneItems;
+  if (state.boardDoneFilter === 'recientes') {
+    // Muestra las de hoy o al menos las últimas 5 terminadas
+    visibleDoneItems = allDoneItems.filter((t, idx) => doneToday(t) || idx < 5);
+  } else if (state.boardDoneFilter === 'semana') {
+    visibleDoneItems = allDoneItems.filter((t) => (parseLocal(t.completed_at) || 0) >= weekAgo);
+  }
+
   const cols = STATUS_ORDER.map((s) => {
+    if (s === 'terminada') {
+      const totalDone = allDoneItems.length;
+      const countLabel = visibleDoneItems.length === totalDone ? `${totalDone}` : `${visibleDoneItems.length}/${totalDone}`;
+      
+      const filterPills = `
+        <div class="done-filter-bar">
+          <button class="done-pill ${state.boardDoneFilter === 'recientes' ? 'active' : ''}" data-action="set-board-done-filter" data-val="recientes">Recientes</button>
+          <button class="done-pill ${state.boardDoneFilter === 'semana' ? 'active' : ''}" data-action="set-board-done-filter" data-val="semana">Últimos 7 días</button>
+          <button class="done-pill ${state.boardDoneFilter === 'todas' ? 'active' : ''}" data-action="set-board-done-filter" data-val="todas">Todas (${totalDone})</button>
+        </div>`;
+
+      let bodyHtml = '';
+      if (!allDoneItems.length) {
+        bodyHtml = '<div class="empty">Nada terminado recientemente.</div>';
+      } else {
+        bodyHtml = `
+          ${filterPills}
+          <div class="list done-organized-list">${visibleDoneItems.map(taskCard).join('')}</div>
+          ${(visibleDoneItems.length < totalDone) ? `
+            <div class="done-more-notice">
+              <span class="small muted">Mostrando ${visibleDoneItems.length} de ${totalDone} tareas finalizadas.</span>
+              <button class="btn btn-ghost btn-sm" data-action="set-board-done-filter" data-val="todas">Ver todas (${totalDone})</button>
+            </div>` : ''}
+        `;
+      }
+
+      return `<section class="col" data-status="${s}">
+        <div class="col-head"><span>${STATUS[s]}</span><span class="count">${countLabel}</span></div>
+        ${bodyHtml}
+      </section>`;
+    }
+
     const items = sortTasks(list.filter((t) => t.status === s));
     return `<section class="col" data-status="${s}">
       <div class="col-head"><span>${STATUS[s]}</span><span class="count">${items.length}</span></div>
-      ${taskList(items, s === 'terminada' ? 'Nada terminado recientemente.' : 'Sin tareas aquí.')}
+      ${taskList(items, 'Sin tareas aquí.')}
     </section>`;
   }).join('');
-  const tabs = STATUS_ORDER.map((s) => `<button class="${f.status === s ? 'on' : ''}" data-action="board-status" data-status="${s}">${STATUS[s]} <span class="count">${list.filter((t) => t.status === s).length}</span></button>`).join('');
+
+  const tabs = STATUS_ORDER.map((s) => {
+    const count = s === 'terminada' ? allDoneItems.length : list.filter((t) => t.status === s).length;
+    return `<button class="${f.status === s ? 'on' : ''}" data-action="board-status" data-status="${s}">${STATUS[s]} <span class="count">${count}</span></button>`;
+  }).join('');
 
   return `
   <div class="page-head"><div><h1>Tablero del equipo</h1><p class="muted" style="margin:4px 0 0">Control en tiempo real de avance, cargas y ayudas.</p></div></div>
@@ -1056,7 +1144,11 @@ document.addEventListener('click', async (e) => {
       if (status === 'en_progreso' && !t.started_at) patch.started_at = nowIso();
       if (status === 'terminada') {
         patch.completed_at = nowIso();
+        patch.completed_by = state.me ? state.me.id : null;
         patch.needs_help = false;
+      } else if (t.status === 'terminada') {
+        patch.completed_at = null;
+        patch.completed_by = null;
       }
       run(async () => {
         const { error } = await sb.from('tasks').update(patch).eq('id', id);
@@ -1143,6 +1235,12 @@ document.addEventListener('click', async (e) => {
       render(); break;
     case 'board-status':
       state.filters.status = el.dataset.status; render(); break;
+    case 'toggle-done-today':
+      state.showAllDoneToday = !state.showAllDoneToday;
+      render(); break;
+    case 'set-board-done-filter':
+      state.boardDoneFilter = el.dataset.val || 'recientes';
+      render(); break;
 
     case 'hide': {
       const item = findItem(kind, id);
