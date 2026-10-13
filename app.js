@@ -49,6 +49,8 @@ const ICON = {
   chevronDown: '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>',
   chevronUp: '<svg viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>',
   checkCircle: '<svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
+  phone: '<svg viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="3"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>',
+  download: '<svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
 };
 
 /* ---------- Estado local ---------- */
@@ -862,11 +864,13 @@ function viewMore() {
   if (state.more === 'equipo') return viewUsers();
   if (state.more === 'papelera') return viewTrash();
   if (state.more === 'guia') return viewGuide();
+  if (state.more === 'instalar') return viewInstallGuide();
   return `
   <div class="page-head"><h1>Más</h1></div>
   <div class="card row" style="gap:14px"><span class="avatar lg">${esc(initials(state.me.name))}</span>
     <div><b style="font-size:17px">${esc(state.me.name)}</b><div><span class="pill role-${state.me.role}">${ROLE[state.me.role]}</span></div></div></div>
   <div class="card menu-list" style="padding:0;margin-top:14px">
+    <button data-action="more" data-sub="instalar" style="color:var(--blue);font-weight:600">${ICON.phone} Instalar como App en celular</button>
     <button data-action="more" data-sub="equipo">${ICON.users} Equipo y roles</button>
     <button data-action="more" data-sub="papelera">${ICON.eyeOff} Elementos ocultos</button>
     <button data-action="more" data-sub="guia">${ICON.book} Metodología de trabajo</button>
@@ -874,6 +878,47 @@ function viewMore() {
   </div>`;
 }
 const backBtn = () => '<button class="btn btn-sm btn-ghost" data-action="more" data-sub="menu">← Volver</button>';
+
+function viewInstallGuide() {
+  return `
+  <div class="page-head"><div><h1>Instalar como App</h1><p class="muted" style="margin:4px 0 0">Acceso directo en tu celular con icono propio y pantalla completa.</p></div>${backBtn()}</div>
+  <div class="cards-grid list guide">
+    <div class="card pwa-install-box">
+      <div style="display:flex;gap:12px;align-items:center">
+        <img src="icon.svg" alt="" style="width:52px;height:52px;border-radius:14px;box-shadow:0 2px 8px rgba(0,0,0,.15)">
+        <div><b style="font-size:16px">Objetivos · Wellness</b><p class="muted small" style="margin:2px 0 0">Decathlon</p></div>
+      </div>
+      <div style="margin-top:14px" id="pwa-install-cta">
+        <button class="btn btn-primary" data-action="trigger-install" style="width:100%">${ICON.download} Instalar en este dispositivo</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="display:flex;align-items:center;gap:8px">📱 En iPhone / iPad (Safari)</h3>
+      <ol style="padding-left:18px;margin:8px 0 0;line-height:1.6">
+        <li>Abre esta página en <b>Safari</b>.</li>
+        <li>Toca el botón <b>Compartir</b> (el cuadrito con la flecha hacia arriba ⎋ abajo en el centro).</li>
+        <li>Baja y selecciona <b>"Agregar a inicio"</b> (o <i>"Add to Home Screen"</i> ➕).</li>
+        <li>Toca <b>"Agregar"</b> arriba a la derecha. ¡Listo! Quedará como cualquier app instalada.</li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <h3 style="display:flex;align-items:center;gap:8px">🤖 En Android (Chrome)</h3>
+      <ol style="padding-left:18px;margin:8px 0 0;line-height:1.6">
+        <li>Abre esta página en <b>Google Chrome</b>.</li>
+        <li>Toca los <b>tres puntos</b> (⋮) arriba a la derecha.</li>
+        <li>Selecciona <b>"Instalar aplicación"</b> o <b>"Agregar a la pantalla principal"</b>.</li>
+        <li>Confirma tocando <b>"Instalar"</b>.</li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <h3 style="display:flex;align-items:center;gap:8px">💻 En Computador (Chrome / Edge)</h3>
+      <p class="muted small" style="margin:6px 0 0">En la barra de direcciones verás un icono de computadora con una flecha hacia abajo. Haz clic en él y selecciona <b>Instalar</b> para abrirla en su propia ventana sin barras de navegador.</p>
+    </div>
+  </div>`;
+}
 
 function viewUsers() {
   const list = isLead() ? state.users : activeUsers();
@@ -1118,6 +1163,19 @@ document.addEventListener('click', async (e) => {
       break;
     case 'more':
       state.more = el.dataset.sub; render(); window.scrollTo(0, 0); break;
+    case 'trigger-install':
+      if (window.deferredPrompt) {
+        window.deferredPrompt.prompt();
+        window.deferredPrompt.userChoice.then((choice) => {
+          if (choice.outcome === 'accepted') {
+            toast('¡Aplicación instalada con éxito!', 'ok');
+          }
+          window.deferredPrompt = null;
+        });
+      } else {
+        toast('Sigue las instrucciones abajo según tu tipo de dispositivo.', '');
+      }
+      break;
     case 'close-sheet':
       closeSheet(); break;
     case 'login-pick':
@@ -1501,4 +1559,19 @@ function initRealtime() {
     try { await refresh(); } catch (e) { console.error(e); }
   }
   render();
+
+  // Registro de Service Worker para PWA
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js').catch((err) => {
+        console.warn('SW registration failed:', err);
+      });
+    });
+  }
+
+  // Capturar evento de instalación nativo
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    window.deferredPrompt = e;
+  });
 })();

@@ -282,6 +282,12 @@ svg { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 2
   flex-direction: column; gap: 6px; align-items: center;
 }
 
+/* PWA Box */
+.pwa-install-box {
+  background: linear-gradient(145deg, #ffffff 0%, #F5F7FF 100%);
+  border: 1.5px solid var(--blue-50);
+}
+
 /* ---------- Objetivos ---------- */
 .obj h3 { font-size: 17px; }
 .obj .desc { color: var(--muted); font-size: 14px; margin: 4px 0 10px; }
