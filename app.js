@@ -25,7 +25,7 @@ const STATUS = {
 const STATUS_ORDER = ['sin_iniciar', 'en_progreso', 'faltante', 'terminada'];
 const PRIORITY = { baja: 'Baja', media: 'Media', alta: 'Alta' };
 const PRIO_RANK = { alta: 0, media: 1, baja: 2 };
-const ROLE = { admin: 'Administrador', lider: 'Líder', colaborador: 'Colaborador' };
+const ROLE = { admin: 'Administrador', lider: 'Líder', colaborador: 'Colaborador', colaborador_pro: 'Colaborador Pro' };
 const WEEKDAYS = [['1', 'L'], ['2', 'M'], ['3', 'X'], ['4', 'J'], ['5', 'V'], ['6', 'S'], ['7', 'D']];
 const URG_RANK = { overdue: 0, critical: 1, soon: 2, near: 3, ok: 4, none: 5, done: 6 };
 
@@ -51,6 +51,8 @@ const ICON = {
   checkCircle: '<svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
   phone: '<svg viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="3"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>',
   download: '<svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+  lock: '<svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+  unlock: '<svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>',
 };
 
 /* ---------- Estado local ---------- */
@@ -189,10 +191,16 @@ const userById = (id) => state.users.find((u) => u.id === Number(id));
 const userName = (id) => (userById(id) || {}).name || 'Sin asignar';
 const objById = (id) => state.objectives.find((o) => o.id === Number(id));
 const activeUsers = () => state.users.filter((u) => u.active);
-const activeTasks = () => state.tasks.filter((t) => t.active);
+const activeTasks = () => state.tasks.filter((t) => t.active && canSeeTask(t));
 const activeObjectives = () => state.objectives.filter((o) => o.active);
 const isAdmin = () => state.me && state.me.role === 'admin';
 const isLead = () => state.me && (state.me.role === 'admin' || state.me.role === 'lider');
+const hasPrivateTasks = () => state.me && ['admin', 'lider', 'colaborador_pro'].includes(state.me.role);
+const isTaskPrivate = (t) => Boolean(t.is_private);
+const canSeeTask = (t, uid = (state.me && state.me.id)) => {
+  if (!t.is_private) return true;
+  return Number(uid) && t.created_by === Number(uid);
+};
 const isOpen = (t) => t.status !== 'terminada';
 const doneToday = (t) => t.status === 'terminada' && (t.completed_at ? dateStr(parseLocal(t.completed_at)) === todayStr() : false);
 
@@ -201,9 +209,16 @@ const getHelperIds = (t) => Array.isArray(t.helper_ids) ? t.helper_ids.map(Numbe
 const isHelper = (t, uid = (state.me && state.me.id)) => getHelperIds(t).includes(Number(uid));
 const isAssignedOrHelper = (t, uid = (state.me && state.me.id)) => t.assignee_id === Number(uid) || isHelper(t, uid);
 
-const canEditTask = (t) => isLead() || isAssignedOrHelper(t, state.me.id) || t.created_by === state.me.id;
-const canFullEditTask = (t) => !t.id || isLead() || t.created_by === state.me.id;
+const canEditTask = (t) => {
+  if (t.is_private) return t.created_by === (state.me && state.me.id);
+  return isLead() || isAssignedOrHelper(t, state.me && state.me.id) || t.created_by === (state.me && state.me.id);
+};
+const canFullEditTask = (t) => {
+  if (t.is_private) return t.created_by === (state.me && state.me.id);
+  return !t.id || isLead() || t.created_by === (state.me && state.me.id);
+};
 const canHideTask = (t) => canEditTask(t);
+const canTogglePrivacy = (t) => Boolean(t.id && hasPrivateTasks() && t.created_by === (state.me && state.me.id));
 
 
 function urgency(t) {
@@ -250,7 +265,7 @@ function sortTasks(list) {
 const isUrgent = (t) => ['overdue', 'critical'].includes(urgency(t).level);
 
 function objectiveStats(o) {
-  const ts = activeTasks().filter((t) => t.objective_id === o.id);
+  const ts = activeTasks().filter((t) => !t.is_private && t.objective_id === o.id);
   const w = (t) => Math.max(1, t.estimated_minutes || 0);
   const total = ts.reduce((s, t) => s + w(t), 0);
   const done = ts.filter((t) => t.status === 'terminada').reduce((s, t) => s + w(t), 0);
@@ -544,6 +559,15 @@ function taskCard(t) {
     }
   }
 
+  // Si soy el creador y tengo rol con tareas privadas, puedo cambiar entre pública y privada
+  if (t.active && canTogglePrivacy(t)) {
+    if (t.is_private) {
+      actions.push(`<button class="btn btn-ghost btn-sm" data-action="toggle-privacy" data-id="${t.id}" title="Hacer visible para todo el equipo">${ICON.unlock} Hacer pública</button>`);
+    } else {
+      actions.push(`<button class="btn btn-ghost btn-sm" data-action="toggle-privacy" data-id="${t.id}" title="Hacer privada (solo visible para ti)">${ICON.lock} Hacer privada</button>`);
+    }
+  }
+
   let real = '';
   if (t.status === 'terminada' && t.started_at && t.completed_at) {
     const startD = parseLocal(t.started_at);
@@ -567,9 +591,10 @@ function taskCard(t) {
     </span>` : '';
 
   return `
-  <article class="task u-${u.level} ${t.needs_help && isOpen(t) ? 'needs-help' : ''} ${t.active ? '' : 'is-hidden'}" data-action="open-task" data-id="${t.id}">
+  <article class="task u-${u.level} ${t.needs_help && isOpen(t) ? 'needs-help' : ''} ${t.is_private ? 'is-private' : ''} ${t.active ? '' : 'is-hidden'}" data-action="open-task" data-id="${t.id}">
     <div class="task-top">
       <span class="pill st-${t.status}">${STATUS[t.status]}</span>
+      ${t.is_private ? `<span class="pill pill-private" title="Solo tú puedes ver esta tarea">${ICON.lock} Privada</span>` : ''}
       ${t.priority !== 'media' ? `<span class="pill prio-${t.priority}">Prioridad ${PRIORITY[t.priority].toLowerCase()}</span>` : ''}
       ${t.routine_id ? `<span class="pill">${ICON.repeat} Diaria</span>` : ''}
     </div>
@@ -603,8 +628,8 @@ const legend = () => `<div class="legend">
 function viewToday() {
   const me = state.me.id;
   const all = activeTasks();
-  const mine = sortTasks(all.filter((t) => isAssignedOrHelper(t, me) && isOpen(t)));
-  const free = sortTasks(all.filter((t) => !t.assignee_id && isOpen(t)));
+  const mine = sortTasks(all.filter((t) => !t.is_private && isAssignedOrHelper(t, me) && isOpen(t)));
+  const free = sortTasks(all.filter((t) => !t.is_private && !t.assignee_id && isOpen(t)));
   const doneAll = sortTasks(all.filter((t) => isAssignedOrHelper(t, me) && doneToday(t)));
   const today = todayStr();
   const dueToday = mine.filter((t) => !t.due_at || dateStr(parseLocal(t.due_at)) <= today);
@@ -640,12 +665,27 @@ function viewToday() {
     `;
   }
 
+  const privates = hasPrivateTasks()
+    ? sortTasks(all.filter((t) => t.is_private && t.created_by === me && isOpen(t)))
+    : [];
+
+  const privateSectionHtml = hasPrivateTasks() ? `
+    <div class="section private-tasks-section">
+      <div class="section-head">
+        <h2>${ICON.lock} Mis tareas privadas <span class="count">${privates.length}</span></h2>
+        <button class="btn btn-sm btn-ghost" data-action="new-private-task" title="Crear tarea que solo tú podrás ver">${ICON.plus} Nueva privada</button>
+      </div>
+      <p class="small muted" style="margin:-4px 0 10px">Solo tú puedes ver este apartado y estas tareas. Ningún otro colaborador las ve.</p>
+      ${taskList(privates, 'No tienes tareas privadas en curso. Puedes crear notas, recordatorios o tareas confidenciales con el botón "+ Nueva privada".')}
+    </div>` : '';
+
   return `
   <div class="page-head"><div><h1>${hello}, ${esc(state.me.name.split(' ')[0])}</h1><p class="muted" style="margin:4px 0 0;text-transform:capitalize">${dateLabel}</p></div></div>
   <div class="stats">
     <div class="stat"><b>${mine.length}</b><span>Mis tareas / apoyo</span></div>
+    ${hasPrivateTasks() ? `<div class="stat private-stat"><b>${privates.length}</b><span>Tareas privadas</span></div>` : ''}
     <div class="stat ${urgent ? 'alert' : ''}"><b>${urgent}</b><span>Urgentes / vencidas</span></div>
-    <div class="stat"><b>${fmtMinutes(mine.reduce((s, t) => s + (t.estimated_minutes || 0), 0))}</b><span>Tiempo estimado total</span></div>
+    <div class="stat"><b>${fmtMinutes(mine.reduce((s, t) => s + (t.estimated_minutes || 0), 0))}</b><span>Tiempo estimado</span></div>
     <div class="stat good"><b>${doneAll.length}</b><span>Terminadas hoy</span></div>
   </div>
   <div class="card load">
@@ -660,6 +700,7 @@ function viewToday() {
         ${taskList(mine, 'No tienes tareas pendientes ni en apoyo. Toma una de las disponibles 👇')}
         ${legend()}
       </div>
+      ${privateSectionHtml}
     </div>
     <div>
       <div class="section"><div class="section-head"><h2>Disponibles para tomar <span class="count">${free.length}</span></h2></div>
@@ -673,7 +714,7 @@ function viewToday() {
 
 function viewBoard() {
   const f = state.filters;
-  const all = activeTasks();
+  const all = activeTasks().filter((t) => !t.is_private);
   let list = all.filter((t) => isOpen(t) || t.status === 'terminada');
 
   if (f.person === 'none') list = list.filter((t) => !t.assignee_id && !getHelperIds(t).length);
@@ -931,8 +972,13 @@ function viewUsers() {
           ${Object.keys(ROLE).map((r) => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${ROLE[r]}</option>`).join('')}</select>
         ${self ? '' : `<button class="btn btn-sm ${u.active ? 'btn-ghost' : 'btn-success'}" data-action="user-toggle" data-id="${u.id}">${u.active ? 'Desactivar' : 'Reactivar'}</button>
         <button class="btn btn-sm btn-danger" data-action="user-delete" data-id="${u.id}" title="Eliminar">${ICON.trash}</button>`}`;
-    } else if (state.me.role === 'lider' && u.role === 'colaborador') {
-      actions = `<button class="btn btn-sm ${u.active ? 'btn-ghost' : 'btn-success'}" data-action="user-toggle" data-id="${u.id}">${u.active ? 'Desactivar' : 'Reactivar'}</button>`;
+    } else if (state.me.role === 'lider' && ['colaborador', 'colaborador_pro'].includes(u.role)) {
+      actions = `
+        <select data-change="user-role" data-id="${u.id}" style="width:auto;min-height:36px;padding:6px 10px;font-size:14px">
+          <option value="colaborador" ${u.role === 'colaborador' ? 'selected' : ''}>Colaborador</option>
+          <option value="colaborador_pro" ${u.role === 'colaborador_pro' ? 'selected' : ''}>Colaborador Pro</option>
+        </select>
+        ${self ? '' : `<button class="btn btn-sm ${u.active ? 'btn-ghost' : 'btn-success'}" data-action="user-toggle" data-id="${u.id}">${u.active ? 'Desactivar' : 'Reactivar'}</button>`}`;
     }
     return `<div class="user-row ${u.active ? '' : 'off'}"><span class="avatar">${esc(initials(u.name))}</span>
       <div class="u-body"><b>${esc(u.name)}${self ? ' (tú)' : ''}</b><div class="small muted">${isAdmin() ? '' : `<span class="pill role-${u.role}">${ROLE[u.role]}</span> `}${u.active ? `Último ingreso: ${u.last_login ? fmtDateTime(u.last_login) : '—'}` : 'Desactivado'}</div></div>
@@ -1034,6 +1080,16 @@ function openTaskSheet(t) {
       <label class="check"><input type="checkbox" name="needs_help" ${t.needs_help ? 'checked' : ''}> 🆘 Necesito ayuda con esta tarea</label>
       <input name="help_note" maxlength="500" placeholder="¿Qué necesitas? (opcional)" value="${esc(t.help_note || '')}">
     </div>
+
+    ${hasPrivateTasks() ? `
+    <div class="private-field-box">
+      <label class="check">
+        <input type="checkbox" name="is_private" ${t.is_private ? 'checked' : ''}>
+        <b>${ICON.lock} Tarea privada (oculta de los demás)</b>
+      </label>
+      <p class="small muted" style="margin:4px 0 0 24px">Solo tú podrás ver y gestionar esta tarea en tu sección privada. Ningún otro colaborador la verá.</p>
+    </div>` : ''}
+
     <div class="sheet-actions">
       ${!isNew && t.active && canHideTask(t) ? `<button type="button" class="btn btn-ghost" data-action="hide" data-kind="tasks" data-id="${t.id}">${ICON.eyeOff} Ocultar</button>` : ''}
       ${!isNew && isAdmin() ? `<button type="button" class="btn btn-danger" data-action="hard-delete" data-kind="tasks" data-id="${t.id}">${ICON.trash}</button>` : ''}
@@ -1189,6 +1245,15 @@ document.addEventListener('click', async (e) => {
         due_at: defaultDue(), estimated_minutes: 30, priority: 'media', status: 'sin_iniciar',
         assignee_id: el.dataset.assignee ? Number(el.dataset.assignee) : (isLead() ? null : state.me.id),
         objective_id: el.dataset.objective ? Number(el.dataset.objective) : null,
+        is_private: false,
+      });
+      break;
+    case 'new-private-task':
+      openTaskSheet({
+        due_at: defaultDue(), estimated_minutes: 30, priority: 'media', status: 'sin_iniciar',
+        assignee_id: state.me.id,
+        objective_id: null,
+        is_private: true,
       });
       break;
     case 'open-task': {
@@ -1300,6 +1365,31 @@ document.addEventListener('click', async (e) => {
       state.boardDoneFilter = el.dataset.val || 'recientes';
       render(); break;
 
+    case 'toggle-privacy': {
+      e.stopPropagation();
+      const t = findItem('tasks', id);
+      if (!t) return;
+      const willBePrivate = !t.is_private;
+      const msg = willBePrivate
+        ? `¿Hacer privada la tarea "${t.title}"?\nSolo tú podrás verla en tu sección privada.`
+        : `¿Hacer pública la tarea "${t.title}"?\nTodo el equipo podrá verla en el tablero.`;
+      if (!confirm(msg)) return;
+      const patch = {
+        is_private: willBePrivate,
+        updated_at: nowIso()
+      };
+      if (willBePrivate) {
+        patch.assignee_id = state.me.id;
+        patch.helper_ids = [];
+      }
+      run(async () => {
+        const { error } = await sb.from('tasks').update(patch).eq('id', id);
+        if (error) throw new Error(error.message);
+        await logActivity('editar', 'tarea', id, `${willBePrivate ? 'Cambió a privada' : 'Hizo pública'} la tarea "${t.title}"`);
+      }, willBePrivate ? 'Tarea cambiada a privada (solo tú la ves)' : 'Tarea hecha pública (visible para el equipo)');
+      break;
+    }
+
     case 'hide': {
       const item = findItem(kind, id);
       if (!item || !confirm(`¿Ocultar "${item.title}"?\nNo se perderá: podrás restaurarlo en Más → Elementos ocultos.`)) return;
@@ -1369,13 +1459,17 @@ document.addEventListener('change', (e) => {
     if (el.dataset.filter === 'activityUser') loadActivity().catch((err) => toast(err.message, 'error'));
     else render();
   } else if (el.dataset.change === 'user-role') {
-    if (!isAdmin()) return;
     const uid = Number(el.dataset.id);
+    const targetUser = findItem('users', uid);
+    if (!isAdmin() && !(state.me && state.me.role === 'lider' && targetUser && ['colaborador', 'colaborador_pro'].includes(targetUser.role))) {
+      toast('No tienes permiso para cambiar este rol.', 'error');
+      return;
+    }
     const role = el.value;
     run(async () => {
       const { error } = await sb.from('users').update({ role }).eq('id', uid);
       if (error) throw new Error(error.message);
-      await logActivity('editar', 'usuario', uid, `Cambió rol a ${ROLE[role]}`);
+      await logActivity('editar', 'usuario', uid, `Cambió rol de ${targetUser ? targetUser.name : 'usuario'} a ${ROLE[role]}`);
     }, 'Rol actualizado');
   }
 });
@@ -1402,9 +1496,18 @@ document.addEventListener('submit', async (e) => {
     data.needs_help = form.elements.needs_help.checked;
     if (!data.needs_help) data.help_note = '';
 
-    // Múltiples ayudantes
-    const selectedHelpers = fd.getAll('helper_ids').map(Number).filter(Boolean);
-    data.helper_ids = selectedHelpers;
+    // Soporte para tareas privadas
+    data.is_private = form.elements.is_private ? form.elements.is_private.checked : false;
+
+    // Si es privada, se autoasigna al creador
+    if (data.is_private) {
+      data.assignee_id = state.me.id;
+      data.helper_ids = [];
+    } else {
+      // Múltiples ayudantes
+      const selectedHelpers = fd.getAll('helper_ids').map(Number).filter(Boolean);
+      data.helper_ids = selectedHelpers;
+    }
 
     ['assignee_id', 'objective_id', 'due_at'].forEach((k) => { if (!data[k]) data[k] = null; });
     if (data.assignee_id) data.assignee_id = Number(data.assignee_id);

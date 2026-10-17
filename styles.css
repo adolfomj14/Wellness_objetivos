@@ -166,6 +166,7 @@ svg { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 2
 .role-admin { background: #F4EBFF; color: #6941C6; }
 .role-lider { background: var(--blue-50); color: var(--blue); }
 .role-colaborador { background: #F2F4F7; color: #475467; }
+.role-colaborador_pro { background: #FFF4E5; color: #B54708; font-weight: 700; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip { border: 1px solid var(--line); background: #fff; border-radius: 20px; padding: 7px 13px; cursor: pointer; font-size: 14px; font-weight: 500; }
 .chip:hover { border-color: var(--blue); color: var(--blue); }
@@ -287,6 +288,23 @@ svg { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 2
   background: linear-gradient(145deg, #ffffff 0%, #F5F7FF 100%);
   border: 1.5px solid var(--blue-50);
 }
+
+/* ---------- Tareas Privadas ---------- */
+.pill-private { background: #F4EBFF; color: #6941C6; font-weight: 700; border: 1px solid #D8B4FE; }
+.task.is-private {
+  border-left: 6px solid #9333EA !important;
+  background: #FCFAFF;
+}
+.task.is-private::before { display: none; }
+.private-stat b { color: #7E22CE; }
+.private-tasks-section {
+  background: #FAF7FD; border: 1.5px dashed #D8B4FE; border-radius: var(--radius); padding: 14px;
+}
+.private-tasks-section .section-head h2 { color: #581C87; }
+.private-field-box {
+  background: #FAF5FF; border: 1px solid #E9D5FF; border-radius: 12px; padding: 12px; margin-top: 4px;
+}
+.private-field-box b { color: #6B21A8; display: inline-flex; align-items: center; gap: 6px; }
 
 /* ---------- Objetivos ---------- */
 .obj h3 { font-size: 17px; }
