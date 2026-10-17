@@ -1,8 +1,9 @@
 {
   "name": "Objetivos del Equipo · Wellness Movilidad",
   "short_name": "Objetivos",
-  "start_url": "./",
-  "scope": "./",
+  "id": "/Wellness_objetivos/",
+  "start_url": "/Wellness_objetivos/",
+  "scope": "/Wellness_objetivos/",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#F4F5FB",
@@ -10,7 +11,7 @@
   "description": "Tablero y gestión de objetivos y tareas diarias para el equipo de Wellness Movilidad Decathlon.",
   "icons": [
     {
-      "src": "icon.svg",
+      "src": "/Wellness_objetivos/icon.svg",
       "sizes": "192x192 512x512 any",
       "type": "image/svg+xml",
       "purpose": "any maskable"

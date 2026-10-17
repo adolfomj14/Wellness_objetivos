@@ -1,5 +1,5 @@
 // Service Worker para permitir instalación como PWA y funcionamiento fluido
-const CACHE_NAME = 'objetivos-v1';
+const CACHE_NAME = 'objetivos-v2';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
