@@ -53,6 +53,8 @@ const ICON = {
   download: '<svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
   lock: '<svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
   unlock: '<svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>',
+  bell: '<svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>',
+  bellOff: '<svg viewBox="0 0 24 24"><path d="M13.73 21a2 2 0 0 1-3.46 0"/><path d="M18.63 13A17.89 17.89 0 0 1 18 8"/><path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"/><line x1="1" y1="1" x2="23" y2="23"/></svg>',
 };
 
 /* ---------- Estado local ---------- */
@@ -220,6 +222,181 @@ const canFullEditTask = (t) => {
 const canHideTask = (t) => canEditTask(t);
 const canTogglePrivacy = (t) => Boolean(t.id && hasPrivateTasks() && t.created_by === (state.me && state.me.id));
 
+/* ---------- Sistema de Notificaciones del Equipo ---------- */
+const notifiedDueAlerts = new Set();
+
+function canNotify() {
+  return ('Notification' in window) &&
+    Notification.permission === 'granted' &&
+    localStorage.getItem('obj_notifications_disabled') !== 'true';
+}
+
+function isNotificationGranted() {
+  return ('Notification' in window) && Notification.permission === 'granted';
+}
+
+async function requestNotificationPermission() {
+  if (!('Notification' in window)) {
+    toast('Este navegador no soporta notificaciones.', 'error');
+    return false;
+  }
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission === 'granted') {
+      localStorage.setItem('obj_notifications_disabled', 'false');
+      toast('¡Notificaciones activadas con éxito! 🎉', 'ok');
+      await sendLocalNotification('🔔 Notificaciones del equipo activadas', {
+        body: 'Te avisaremos cuando el equipo cree o termine tareas, o cuando estén por vencer.',
+        tag: 'notif-welcome'
+      });
+      render();
+      return true;
+    } else if (permission === 'denied') {
+      toast('Notificaciones bloqueadas en el navegador.', 'error');
+      render();
+      return false;
+    }
+  } catch (err) {
+    toast('No se pudo activar las notificaciones: ' + err.message, 'error');
+  }
+  return false;
+}
+
+async function sendLocalNotification(title, options = {}) {
+  if (!canNotify() || !state.me) return;
+  const opts = {
+    icon: 'icon.svg',
+    badge: 'icon.svg',
+    vibrate: [200, 100, 200],
+    ...options
+  };
+
+  try {
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.ready;
+      if (reg && reg.showNotification) {
+        return reg.showNotification(title, opts);
+      }
+    }
+    new Notification(title, opts);
+  } catch (err) {
+    console.warn('Error al mostrar notificación:', err);
+  }
+}
+
+function handleTaskRealtimeNotification(payload) {
+  if (!canNotify() || !state.me || !payload) return;
+  const evt = payload.eventType;
+  const row = payload.new;
+  if (!row) return;
+
+  // Privacidad: si es privada y no soy el dueño, ignorar absolutamente
+  if (row.is_private && row.created_by !== state.me.id) return;
+
+  const prev = state.tasks.find((t) => t.id === row.id);
+
+  if (evt === 'INSERT') {
+    // Si yo mismo la creé, no me notifico a mí mismo
+    if (row.created_by === state.me.id) return;
+    const creator = userName(row.created_by);
+    sendLocalNotification('📌 Nueva tarea en el equipo', {
+      body: `${creator} creó: "${row.title}"`,
+      tag: `task-new-${row.id}`
+    });
+  } else if (evt === 'UPDATE') {
+    // 1. Tarea finalizada
+    if (row.status === 'terminada' && (!prev || prev.status !== 'terminada')) {
+      if (row.completed_by === state.me.id) return;
+      const finisher = row.completed_by ? userName(row.completed_by) : 'Un compañero';
+      sendLocalNotification('✅ Tarea terminada', {
+        body: `${finisher} finalizó: "${row.title}"`,
+        tag: `task-done-${row.id}`
+      });
+      return;
+    }
+
+    // 2. Tarea tomada o asignada
+    if (row.assignee_id && (!prev || prev.assignee_id !== row.assignee_id)) {
+      if (row.assignee_id === state.me.id) {
+        if (row.created_by !== state.me.id) {
+          sendLocalNotification('📋 Te asignaron una tarea', {
+            body: `Se te ha asignado: "${row.title}"`,
+            tag: `task-assigned-${row.id}`
+          });
+        }
+      } else {
+        const taker = userName(row.assignee_id);
+        sendLocalNotification('👤 Tarea tomada', {
+          body: `${taker} tomó la tarea: "${row.title}"`,
+          tag: `task-taken-${row.id}`
+        });
+      }
+      return;
+    }
+
+    // 3. Piden ayuda (SOS)
+    if (row.needs_help && (!prev || !prev.needs_help)) {
+      if (row.assignee_id === state.me.id) return;
+      const asker = row.assignee_id ? userName(row.assignee_id) : 'Un compañero';
+      sendLocalNotification('🆘 Piden ayuda con una tarea', {
+        body: `${asker} necesita ayuda en: "${row.title}"${row.help_note ? ' (' + row.help_note + ')' : ''}`,
+        tag: `task-help-${row.id}`
+      });
+      return;
+    }
+
+    // 4. Te agregaron como ayudante/apoyo
+    const newHelpers = getHelperIds(row);
+    const prevHelpers = prev ? getHelperIds(prev) : [];
+    if (newHelpers.includes(state.me.id) && !prevHelpers.includes(state.me.id)) {
+      sendLocalNotification('🤝 Te sumaron como apoyo', {
+        body: `Estás colaborando como ayudante en: "${row.title}"`,
+        tag: `task-helper-${row.id}`
+      });
+      return;
+    }
+  }
+}
+
+function checkDueTasksForNotification() {
+  if (!canNotify() || !state.me) return;
+  const now = Date.now();
+  const tasksToCheck = activeTasks().filter((t) => {
+    if (t.status === 'terminada' || !t.due_at) return false;
+    if (t.is_private) return t.created_by === state.me.id;
+    return isLead() || isAssignedOrHelper(t, state.me.id);
+  });
+
+  for (const t of tasksToCheck) {
+    const due = parseLocal(t.due_at);
+    if (!due) continue;
+    const diffMin = Math.round((due.getTime() - now) / 60000);
+
+    // Alerta 1: Por vencer en 30 minutos o menos
+    if (diffMin > 0 && diffMin <= 30) {
+      const key = `${t.id}_soon_30`;
+      if (!notifiedDueAlerts.has(key)) {
+        notifiedDueAlerts.add(key);
+        sendLocalNotification(`⏰ Tarea por vencer (${diffMin} min)`, {
+          body: `"${t.title}" vence ${fmtDue(t.due_at).toLowerCase()}`,
+          tag: `task-due-${t.id}`
+        });
+      }
+    }
+    // Alerta 2: Vencida en los últimos 20 minutos
+    else if (diffMin <= 0 && diffMin >= -20) {
+      const key = `${t.id}_overdue`;
+      if (!notifiedDueAlerts.has(key)) {
+        notifiedDueAlerts.add(key);
+        sendLocalNotification('⚠️ Tarea vencida', {
+          body: `"${t.title}" ha vencido. Requiere atención del equipo.`,
+          tag: `task-overdue-${t.id}`
+        });
+      }
+    }
+  }
+}
+
 
 function urgency(t) {
   if (t.status === 'terminada') {
@@ -382,6 +559,7 @@ async function refresh() {
   await generateRoutineTasks();
   if (state.view === 'actividad') await loadActivity(false);
   render();
+  checkDueTasksForNotification();
 }
 
 async function loadActivity(rerender = true) {
@@ -679,8 +857,21 @@ function viewToday() {
       ${taskList(privates, 'No tienes tareas privadas en curso. Puedes crear notas, recordatorios o tareas confidenciales con el botón "+ Nueva privada".')}
     </div>` : '';
 
+  const notifBannerHtml = ('Notification' in window && Notification.permission === 'default') ? `
+    <div class="notif-banner">
+      <div class="notif-banner-text">
+        <span class="notif-banner-icon">${ICON.bell}</span>
+        <div>
+          <b style="font-size:13.5px;color:var(--blue)">¿Activar alertas de tareas?</b>
+          <p class="small muted" style="margin:2px 0 0">Avisos de tareas creadas, tomadas, finalizadas y alertas de vencimiento.</p>
+        </div>
+      </div>
+      <button class="btn btn-primary btn-sm" data-action="enable-notifications" style="flex:none">Activar</button>
+    </div>` : '';
+
   return `
   <div class="page-head"><div><h1>${hello}, ${esc(state.me.name.split(' ')[0])}</h1><p class="muted" style="margin:4px 0 0;text-transform:capitalize">${dateLabel}</p></div></div>
+  ${notifBannerHtml}
   <div class="stats">
     <div class="stat"><b>${mine.length}</b><span>Mis tareas / apoyo</span></div>
     ${hasPrivateTasks() ? `<div class="stat private-stat"><b>${privates.length}</b><span>Tareas privadas</span></div>` : ''}
@@ -906,11 +1097,22 @@ function viewMore() {
   if (state.more === 'papelera') return viewTrash();
   if (state.more === 'guia') return viewGuide();
   if (state.more === 'instalar') return viewInstallGuide();
+
+  const notifActive = canNotify();
+  const notifGranted = isNotificationGranted();
+  const notifLabel = notifActive
+    ? `${ICON.bell} Notificaciones del equipo <span class="pill st-terminada" style="margin-left:auto;font-size:11px">Activas ✓</span>`
+    : notifGranted
+      ? `${ICON.bellOff} Notificaciones silenciadas <span class="pill st-faltante" style="margin-left:auto;font-size:11px">Silenciadas</span>`
+      : `${ICON.bell} Activar notificaciones del equipo <span class="pill prio-alta" style="margin-left:auto;font-size:11px">Desactivadas</span>`;
+
   return `
   <div class="page-head"><h1>Más</h1></div>
   <div class="card row" style="gap:14px"><span class="avatar lg">${esc(initials(state.me.name))}</span>
     <div><b style="font-size:17px">${esc(state.me.name)}</b><div><span class="pill role-${state.me.role}">${ROLE[state.me.role]}</span></div></div></div>
   <div class="card menu-list" style="padding:0;margin-top:14px">
+    <button data-action="toggle-notifications">${notifLabel}</button>
+    ${notifActive ? `<button data-action="test-notification" style="color:var(--blue);font-weight:600">${ICON.bell} Probar notificación en este equipo</button>` : ''}
     <button data-action="more" data-sub="instalar" style="color:var(--blue);font-weight:600">${ICON.phone} Instalar como App en celular</button>
     <button data-action="more" data-sub="equipo">${ICON.users} Equipo y roles</button>
     <button data-action="more" data-sub="papelera">${ICON.eyeOff} Elementos ocultos</button>
@@ -1219,6 +1421,30 @@ document.addEventListener('click', async (e) => {
       break;
     case 'more':
       state.more = el.dataset.sub; render(); window.scrollTo(0, 0); break;
+    case 'enable-notifications':
+      await requestNotificationPermission();
+      break;
+    case 'toggle-notifications':
+      if (!isNotificationGranted()) {
+        await requestNotificationPermission();
+      } else {
+        const off = localStorage.getItem('obj_notifications_disabled') === 'true';
+        localStorage.setItem('obj_notifications_disabled', off ? 'false' : 'true');
+        toast(off ? '🔔 Notificaciones reactivadas' : '🔕 Notificaciones silenciadas', 'ok');
+        render();
+      }
+      break;
+    case 'test-notification':
+      if (!canNotify()) {
+        await requestNotificationPermission();
+      } else {
+        await sendLocalNotification('🔔 Notificación de prueba', {
+          body: 'Las notificaciones del equipo están funcionando correctamente en tu dispositivo.',
+          tag: 'test-notification'
+        });
+        toast('Notificación de prueba enviada', 'ok');
+      }
+      break;
     case 'trigger-install':
       if (window.deferredPrompt) {
         window.deferredPrompt.prompt();
@@ -1650,7 +1876,10 @@ async function doLogin(name) {
 function initRealtime() {
   if (!sb) return;
   sb.channel('db-changes')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, () => refresh())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, (payload) => {
+      try { handleTaskRealtimeNotification(payload); } catch (e) { console.error('Error notif:', e); }
+      refresh();
+    })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'objectives' }, () => refresh())
     .subscribe();
 }
@@ -1662,6 +1891,10 @@ function initRealtime() {
     try { await refresh(); } catch (e) { console.error(e); }
   }
   render();
+
+  // Monitor periódico de alertas por vencer (cada 60 segundos)
+  setInterval(checkDueTasksForNotification, 60000);
+  setTimeout(checkDueTasksForNotification, 3000);
 
   // Registro de Service Worker para PWA
   if ('serviceWorker' in navigator) {

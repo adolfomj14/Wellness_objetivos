@@ -1,5 +1,5 @@
-// Service Worker para permitir instalación como PWA y funcionamiento fluido
-const CACHE_NAME = 'objetivos-v2';
+// Service Worker para permitir instalación como PWA, funcionamiento fluido y notificaciones
+const CACHE_NAME = 'objetivos-v3';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -47,5 +47,22 @@ self.addEventListener('fetch', (e) => {
         return networkResponse;
       })
       .catch(() => caches.match(e.request))
+  );
+});
+
+// Al tocar una notificación, enfocar o abrir la aplicación
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  e.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if ('focus' in client) {
+          return client.focus();
+        }
+      }
+      if (clients.openWindow) {
+        return clients.openWindow('./');
+      }
+    })
   );
 });
