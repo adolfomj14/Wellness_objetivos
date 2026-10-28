@@ -222,12 +222,27 @@ const canFullEditTask = (t) => {
 const canHideTask = (t) => canEditTask(t);
 const canTogglePrivacy = (t) => Boolean(t.id && hasPrivateTasks() && t.created_by === (state.me && state.me.id));
 
-/* ---------- Sistema de Notificaciones del Equipo ---------- */
+/* ---------- Sistema de Notificaciones del Equipo + Web Push (VAPID) ---------- */
 const notifiedDueAlerts = new Set();
 const sentNotificationKeys = new Set();
 const knownTasksSnapshot = new Map();
 let initialTasksLoaded = false;
-let cachedNotifIconPng = null;
+let swRegPromise = null;
+
+const VAPID_PUBLIC_KEY = (typeof SUPABASE_CONFIG !== 'undefined' && SUPABASE_CONFIG.vapidPublicKey)
+  ? SUPABASE_CONFIG.vapidPublicKey
+  : 'BAKsGKOnwhZPA69o7_YwR25xO0sz0vd4EBFoIBMxcS_A_3IpZ8NaYl-kXwr28BqYGrb7nLynWIbzQjtcx5uMf04';
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
 
 function isNotificationsMuted() {
   return localStorage.getItem('obj_notifications_disabled') === 'true';
@@ -241,31 +256,94 @@ function isNotificationGranted() {
   return ('Notification' in window) && Notification.permission === 'granted';
 }
 
-// Genera un icono PNG válido en memoria para que Windows / Android nunca fallen al decodificar SVG en notificaciones nativas
-function getNotificationIconPng() {
-  if (cachedNotifIconPng) return cachedNotifIconPng;
+// Suscribe el dispositivo a Web Push (VAPID) y guarda el endpoint en Supabase (push_subscriptions)
+async function subscribeDeviceToWebPush(reg) {
+  if (!reg || !('pushManager' in reg) || !state.me || !sb) return null;
+  if (!isNotificationGranted() || isNotificationsMuted()) return null;
   try {
-    const c = document.createElement('canvas');
-    c.width = 128;
-    c.height = 128;
-    const ctx = c.getContext('2d');
-    ctx.fillStyle = '#3643BA';
-    ctx.beginPath();
-    ctx.roundRect ? ctx.roundRect(0, 0, 128, 128, 28) : ctx.rect(0, 0, 128, 128);
-    ctx.fill();
-    ctx.strokeStyle = '#6EE7B7';
-    ctx.lineWidth = 12;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.beginPath();
-    ctx.moveTo(36, 66);
-    ctx.lineTo(56, 86);
-    ctx.lineTo(94, 44);
-    ctx.stroke();
-    cachedNotifIconPng = c.toDataURL('image/png');
-    return cachedNotifIconPng;
-  } catch (e) {
-    return 'icon.svg';
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub && VAPID_PUBLIC_KEY) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+      });
+    }
+    if (sub) {
+      const subJson = sub.toJSON();
+      if (subJson && subJson.endpoint && subJson.keys) {
+        await sb.from('push_subscriptions').upsert({
+          user_id: state.me.id,
+          endpoint: subJson.endpoint,
+          p256dh: subJson.keys.p256dh,
+          auth: subJson.keys.auth,
+          user_agent: navigator.userAgent.slice(0, 250),
+          updated_at: nowIso()
+        }, { onConflict: 'endpoint' });
+      }
+    }
+    return sub;
+  } catch (err) {
+    console.warn('Aviso al registrar suscripción Web Push:', err);
+    return null;
+  }
+}
+
+// Envía notificación Web Push real a los dispositivos cerrados/bloqueados mediante Supabase Edge Function (send-push)
+async function dispatchRemoteWebPush({ title, body, tag, targetUserIds = null, excludeUserId = null }) {
+  if (!sb || !title) return;
+  try {
+    await sb.functions.invoke('send-push', {
+      body: {
+        title,
+        body: body || '',
+        tag: tag || ('push-' + Date.now()),
+        url: './',
+        targetUserIds,
+        excludeUserId
+      }
+    });
+  } catch (err) {
+    // Si la Edge Function aún no está desplegada, continúa silenciosamente con Realtime + SW local
+    console.warn('Edge Function send-push no disponible o error:', err);
+  }
+}
+
+// Registra y activa inmediatamente el Service Worker (vital para notificaciones nativas en Android / PWA)
+async function ensureServiceWorker() {
+  if (!('serviceWorker' in navigator)) return null;
+  try {
+    if (!swRegPromise) {
+      swRegPromise = navigator.serviceWorker.register('./sw.js?v=5');
+    }
+    const reg = await Promise.race([
+      swRegPromise,
+      new Promise((res) => setTimeout(() => res(null), 2500))
+    ]);
+    if (reg) {
+      if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+      const worker = reg.active || reg.installing || reg.waiting;
+      if (worker && state.me && typeof SUPABASE_CONFIG !== 'undefined') {
+        worker.postMessage({
+          type: 'INIT_BG_SYNC',
+          url: SUPABASE_CONFIG.url,
+          anonKey: SUPABASE_CONFIG.anonKey,
+          userId: state.me.id,
+          userRole: state.me.role
+        });
+      }
+      if ('periodicSync' in reg) {
+        try {
+          await reg.periodicSync.register('check-tasks-sync', { minInterval: 60000 });
+        } catch (e) {}
+      }
+      if (isNotificationGranted() && state.me) {
+        subscribeDeviceToWebPush(reg);
+      }
+    }
+    return reg;
+  } catch (err) {
+    console.warn('Error registrando SW:', err);
+    return null;
   }
 }
 
@@ -329,14 +407,18 @@ function showInAppNotificationBanner(title, body) {
 
 async function requestNotificationPermission() {
   localStorage.setItem('obj_notifications_disabled', 'false');
+  await ensureServiceWorker();
+
   if (!('Notification' in window)) {
-    await sendLocalNotification('🔔 Alertas activadas en la aplicación', {
-      body: 'Tu navegador recibirá alertas visuales y sonoras en pantalla.',
+    toast('En iPhone/iPad debes instalar la app en Pantalla de Inicio (Compartir → Agregar a inicio) para recibir notificaciones al dispositivo.', 'error');
+    await sendLocalNotification('🔔 Alertas en pantalla activadas', {
+      body: 'Para recibir alertas fuera de la app en iPhone, agrégala a la Pantalla de Inicio desde Safari.',
       tag: 'notif-welcome-' + Date.now()
     });
     render();
-    return true;
+    return false;
   }
+
   try {
     const permission = await new Promise((resolve) => {
       try {
@@ -350,19 +432,21 @@ async function requestNotificationPermission() {
     });
 
     if (permission === 'granted') {
-      toast('¡Notificaciones activadas con éxito! 🎉', 'ok');
-      await sendLocalNotification('🔔 Notificaciones del equipo activadas', {
-        body: 'Te avisaremos cuando se creen, tomen o finalicen tareas, o cuando estén por vencer.',
+      const reg = await ensureServiceWorker();
+      if (reg) await subscribeDeviceToWebPush(reg);
+      toast('¡Permiso del dispositivo concedido! 🎉', 'ok');
+      await sendLocalNotification('🔔 Notificaciones del dispositivo activadas', {
+        body: 'Recibirás alertas en tu dispositivo cuando se creen, tomen o finalicen tareas.',
         tag: 'notif-welcome-' + Date.now()
       });
       render();
       return true;
     } else if (permission === 'denied') {
-      toast('Permiso del navegador bloqueado (haz clic en el candado junto a la URL para permitir). Alertas en pantalla activas.', 'error');
-      await sendLocalNotification('🔔 Alertas en pantalla activadas', {
-        body: 'Para ver alertas fuera del navegador, habilita el permiso en el icono junto a la barra de direcciones.',
-        tag: 'notif-fallback-' + Date.now()
-      });
+      toast('⚠️ El navegador tiene bloqueadas las notificaciones. Haz clic en el candado junto a la URL arriba y cambia Notificaciones a "Permitir".', 'error');
+      showInAppNotificationBanner(
+        '⚠️ Permiso bloqueado en tu navegador',
+        'Toca el icono de ajustes/candado a la izquierda de la dirección web arriba → Permisos → Notificaciones → Permitir.'
+      );
       render();
       return false;
     }
@@ -373,47 +457,58 @@ async function requestNotificationPermission() {
 }
 
 async function sendLocalNotification(title, options = {}) {
-  if (isNotificationsMuted() || !state.me) return;
+  if (isNotificationsMuted() || !state.me) return false;
 
-  // 1. Siempre emitir alerta visual flotante y sonido en la app
+  // 1. Emitir alerta visual flotante y sonido en la app
   playNotificationSound();
   showInAppNotificationBanner(title, options.body || '');
 
-  // 2. Si el sistema operativo / navegador tiene permiso concedido, lanzar también la notificación nativa del sistema
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  // 2. Verificar soporte y permiso del sistema operativo / navegador
+  if (!('Notification' in window) || Notification.permission !== 'granted') return false;
 
-  const iconUrl = getNotificationIconPng();
+  const tag = options.tag || ('notif-' + Date.now());
   const opts = {
     body: options.body || '',
-    icon: iconUrl,
-    tag: options.tag || ('notif-' + Date.now()),
+    icon: './icon-192.png',
+    badge: './icon-192.png',
+    vibrate: [200, 100, 200, 100, 200],
+    tag,
+    renotify: true,
+    requireInteraction: false,
     silent: false
   };
 
-  // Intentar primero con Notification directa o Service Worker activo (con timeout corto para nunca colgarse)
+  // 3. Priorizar Service Worker (obligatorio en Android y PWAs instaladas)
   try {
-    if ('serviceWorker' in navigator && navigator.serviceWorker.getRegistration) {
-      const reg = await Promise.race([
-        navigator.serviceWorker.getRegistration(),
-        new Promise((res) => setTimeout(() => res(null), 500))
-      ]);
-      if (reg && reg.active && typeof reg.showNotification === 'function') {
-        await reg.showNotification(title, opts);
-        return;
-      }
+    const reg = await ensureServiceWorker();
+    const activeWorker = reg && (reg.active || navigator.serviceWorker.controller);
+    if (reg && reg.active && typeof reg.showNotification === 'function') {
+      await reg.showNotification(title, opts);
+      return true;
+    } else if (activeWorker) {
+      activeWorker.postMessage({
+        type: 'SHOW_NOTIFICATION',
+        title,
+        body: opts.body,
+        tag
+      });
+      return true;
     }
   } catch (swErr) {
     console.warn('SW showNotification fallback:', swErr);
   }
 
+  // 4. Fallback a constructor Notification directo en escritorio
   try {
     const n = new Notification(title, opts);
     n.onclick = () => {
       window.focus();
       n.close();
     };
+    return true;
   } catch (err) {
     console.warn('Notification nativa fallback:', err);
+    return false;
   }
 }
 
@@ -1691,18 +1786,54 @@ document.addEventListener('click', async (e) => {
       }
       break;
     }
-    case 'test-notification':
+    case 'test-notification': {
       localStorage.setItem('obj_notifications_disabled', 'false');
-      if ('Notification' in window && Notification.permission === 'default') {
+      if (!('Notification' in window)) {
+        toast('En iPhone/iPad debes agregar la app a Pantalla de Inicio desde Safari para notificaciones al dispositivo.', 'error');
+        showInAppNotificationBanner(
+          '📱 Requiere instalar en Pantalla de Inicio',
+          'En iPhone/iPad abre en Safari → Compartir → Agregar a inicio para recibir notificaciones al dispositivo.'
+        );
+        break;
+      }
+      if (Notification.permission === 'default') {
         await requestNotificationPermission();
-      } else {
-        await sendLocalNotification('🔔 Notificación de prueba', {
-          body: '¡Funciona! Recibirás alertas cuando se creen, tomen o finalicen tareas y cuando estén por vencer.',
-          tag: 'test-notif-' + Date.now()
-        });
+        break;
+      }
+      if (Notification.permission === 'denied') {
+        toast('⚠️ Tienes bloqueadas las notificaciones en el navegador. Toca el candado junto a la URL arriba y elige "Permitir".', 'error');
+        showInAppNotificationBanner(
+          '⚠️ Notificaciones bloqueadas en tu navegador',
+          'Toca el icono a la izquierda de la dirección web arriba → Permisos → Notificaciones → Permitir.'
+        );
+        break;
+      }
+      const reg = await ensureServiceWorker();
+      if (reg) await subscribeDeviceToWebPush(reg);
+      const sent = await sendLocalNotification('🔔 Prueba de notificación al dispositivo', {
+        body: '¡Notificación activa! Minimiza o bloquea el teléfono ahora: en 4 segundos te llegará una alerta Push.',
+        tag: 'test-notif-' + Date.now()
+      });
+      if (sent) {
+        toast('✅ Enviada. Minimiza o cierra la app: en 4s llegará la alerta Push.', 'ok');
+        setTimeout(() => {
+          sendLocalNotification('📲 Alerta en tu dispositivo', {
+            body: '¡Funciona! Tu dispositivo recibe alertas aunque estés fuera de la ventana.',
+            tag: 'test-bg-' + Date.now()
+          });
+          if (state.me) {
+            dispatchRemoteWebPush({
+              title: '📲 Alerta Web Push en tu dispositivo',
+              body: '¡Conexión Web Push activa! Recibirás alertas aunque la app esté cerrada.',
+              tag: 'test-webpush-' + Date.now(),
+              targetUserIds: [state.me.id]
+            });
+          }
+        }, 4000);
       }
       render();
       break;
+    }
     case 'trigger-install':
       if (window.deferredPrompt) {
         window.deferredPrompt.prompt();
@@ -1761,6 +1892,23 @@ document.addEventListener('click', async (e) => {
         const { error } = await sb.from('tasks').update(patch).eq('id', id);
         if (error) throw new Error(error.message);
         await logActivity('editar', 'tarea', id, `Cambió estado a "${STATUS[status]}" en "${t.title}"`);
+        if (!t.is_private && state.me) {
+          if (status === 'terminada') {
+            dispatchRemoteWebPush({
+              title: '✅ Tarea completada',
+              body: `"${t.title}" fue finalizada por ${state.me.name}`,
+              tag: `task-done-${id}`,
+              excludeUserId: state.me.id
+            });
+          } else if (status === 'en_progreso') {
+            dispatchRemoteWebPush({
+              title: '▶️ Tarea en progreso',
+              body: `${state.me.name} comenzó "${t.title}"`,
+              tag: `task-start-${id}`,
+              excludeUserId: state.me.id
+            });
+          }
+        }
       }, status === 'terminada' ? '¡Tarea terminada! ✓' : 'Tarea en progreso');
       break;
     }
@@ -1772,6 +1920,14 @@ document.addEventListener('click', async (e) => {
         const { error } = await sb.from('tasks').update({ assignee_id: state.me.id, updated_at: nowIso() }).eq('id', id);
         if (error) throw new Error(error.message);
         await logActivity('tomar', 'tarea', id, `Tomó la tarea "${t.title}"`);
+        if (!t.is_private && state.me) {
+          dispatchRemoteWebPush({
+            title: '✋ Tarea tomada',
+            body: `${state.me.name} tomó la tarea "${t.title}"`,
+            tag: `task-take-${id}`,
+            excludeUserId: state.me.id
+          });
+        }
       }, 'Tarea tomada. ¡Es tuya!');
       break;
     }
@@ -1786,6 +1942,14 @@ document.addEventListener('click', async (e) => {
           const { error } = await sb.from('tasks').update({ helper_ids: nextHelpers, updated_at: nowIso() }).eq('id', id);
           if (error) throw new Error(error.message);
           await logActivity('editar', 'tarea', id, `Se unió como ayudante a la tarea "${t.title}"`);
+          if (!t.is_private && state.me) {
+            dispatchRemoteWebPush({
+              title: '🤝 Nuevo ayudante en tarea',
+              body: `${state.me.name} se unió a apoyar en "${t.title}"`,
+              tag: `task-helper-${id}-${state.me.id}`,
+              excludeUserId: state.me.id
+            });
+          }
         }, '¡Te uniste como ayudante a la tarea!');
       }
       break;
@@ -2018,6 +2182,15 @@ document.addEventListener('submit', async (e) => {
         const { data: created, error } = await sb.from('tasks').insert([data]).select().single();
         if (error) throw new Error(error.message);
         await logActivity('crear', 'tarea', created.id, `Creó la tarea "${data.title}"`);
+        if (!data.is_private && state.me) {
+          const assigneeLabel = data.assignee_id ? userName(data.assignee_id) : 'Sin asignar';
+          dispatchRemoteWebPush({
+            title: '🆕 Nueva tarea creada',
+            body: `"${data.title}" · Responsable: ${assigneeLabel}`,
+            tag: `task-new-${created.id}`,
+            excludeUserId: state.me.id
+          });
+        }
       }
     }, id ? 'Tarea actualizada' : 'Tarea creada');
   }
@@ -2079,12 +2252,21 @@ document.addEventListener('submit', async (e) => {
     }, id ? 'Rutina actualizada' : 'Rutina creada');
   } else if (kind === 'help') {
     const t = findItem('tasks', id);
+    const helpNote = fd.get('help_note') || '';
     ok = await run(async () => {
       const { error } = await sb.from('tasks').update({
-        needs_help: true, help_note: fd.get('help_note') || '', updated_at: nowIso()
+        needs_help: true, help_note: helpNote, updated_at: nowIso()
       }).eq('id', id);
       if (error) throw new Error(error.message);
       await logActivity('editar', 'tarea', id, `Pidió ayuda en "${t.title}"`);
+      if (t && !t.is_private && state.me) {
+        dispatchRemoteWebPush({
+          title: '🆘 Solicitud de ayuda en tarea',
+          body: `${state.me.name} necesita apoyo en "${t.title}"${helpNote ? ': ' + helpNote : ''}`,
+          tag: `task-help-${id}`,
+          excludeUserId: state.me.id
+        });
+      }
     }, 'Aviso enviado: tu equipo verá que necesitas ayuda');
   }
 
@@ -2144,27 +2326,25 @@ function initRealtime() {
 
 /* ---------- Arranque ---------- */
 (async function init() {
+  // Registrar Service Worker inmediatamente al arrancar (sin esperar a refresh, porque el evento 'load' ya pasó)
+  ensureServiceWorker();
+
   if (sb) {
     initRealtime();
     try { await refresh(); } catch (e) { console.error(e); }
   }
   render();
+  ensureServiceWorker();
 
-  // Sincronización periódica (cada 12s) para detectar cambios del equipo y tareas por vencer aunque Realtime no esté activo
+  // Sincronización periódica (cada 12s) para detectar cambios del equipo y tareas por vencer
   setInterval(silentRefresh, 12000);
   setInterval(checkDueTasksForNotification, 30000);
   setTimeout(checkDueTasksForNotification, 2500);
 
-  // Registro y actualización inmediata de Service Worker para PWA
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./sw.js').then((reg) => {
-        if (reg && typeof reg.update === 'function') reg.update();
-      }).catch((err) => {
-        console.warn('SW registration failed:', err);
-      });
-    });
-  }
+  document.addEventListener('visibilitychange', () => {
+    ensureServiceWorker();
+    if (!document.hidden) silentRefresh();
+  });
 
   // Capturar evento de instalación nativo
   window.addEventListener('beforeinstallprompt', (e) => {
