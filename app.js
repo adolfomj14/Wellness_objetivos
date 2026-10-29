@@ -256,6 +256,9 @@ function isNotificationGranted() {
   return ('Notification' in window) && Notification.permission === 'granted';
 }
 
+let hasWebPushSubscription = false;
+const pushReceivedTags = new Set();
+
 // Suscribe el dispositivo a Web Push (VAPID) y guarda el endpoint en Supabase (push_subscriptions)
 async function subscribeDeviceToWebPush(reg) {
   if (!reg || !('pushManager' in reg) || !state.me || !sb) return null;
@@ -271,7 +274,7 @@ async function subscribeDeviceToWebPush(reg) {
     if (sub) {
       const subJson = sub.toJSON();
       if (subJson && subJson.endpoint && subJson.keys) {
-        await sb.from('push_subscriptions').upsert({
+        const { error } = await sb.from('push_subscriptions').upsert({
           user_id: state.me.id,
           endpoint: subJson.endpoint,
           p256dh: subJson.keys.p256dh,
@@ -279,6 +282,7 @@ async function subscribeDeviceToWebPush(reg) {
           user_agent: navigator.userAgent.slice(0, 250),
           updated_at: nowIso()
         }, { onConflict: 'endpoint' });
+        if (!error) hasWebPushSubscription = true;
       }
     }
     return sub;
@@ -291,12 +295,13 @@ async function subscribeDeviceToWebPush(reg) {
 // Envía notificación Web Push real a los dispositivos cerrados/bloqueados mediante Supabase Edge Function (send-push)
 async function dispatchRemoteWebPush({ title, body, tag, targetUserIds = null, excludeUserId = null }) {
   if (!sb || !title) return;
+  const canonicalTag = normalizeNotificationTag(tag);
   try {
     await sb.functions.invoke('send-push', {
       body: {
         title,
         body: body || '',
-        tag: tag || ('push-' + Date.now()),
+        tag: canonicalTag,
         url: './',
         targetUserIds,
         excludeUserId
@@ -308,22 +313,23 @@ async function dispatchRemoteWebPush({ title, body, tag, targetUserIds = null, e
   }
 }
 
-// Normaliza cualquier variante de tag para que Web Push, Realtime y Service Worker compartan exactamente la misma clave
+// Normaliza cualquier variante de tag para que Web Push, Webhook, Realtime y Service Worker usen el mismo tag exacto
 function normalizeNotificationTag(rawTag) {
   const tag = String(rawTag || '');
   let m;
   if ((m = tag.match(/^(?:task-new|new)-(\d+)/))) return `task-new-${m[1]}`;
-  if ((m = tag.match(/^(?:task-done|done)-(\d+)/))) return `task-done-${m[1]}`;
-  if ((m = tag.match(/^(?:task-take|taken)-(\d+)/))) return `task-take-${m[1]}`;
-  if ((m = tag.match(/^(?:task-start|prog)-(\d+)/))) return `task-start-${m[1]}`;
-  if ((m = tag.match(/^(?:task-help|help)-(\d+)/))) return `task-help-${m[1]}`;
-  if ((m = tag.match(/^(?:task-helper|helper)-(\d+)/))) return `task-helper-${m[1]}`;
+  if ((m = tag.match(/^(?:task-done|done)-(\d+)/))) return `done-${m[1]}-terminada`;
+  if ((m = tag.match(/^(?:task-take|taken)-(\d+)/))) return `taken-${m[1]}`;
+  if ((m = tag.match(/^(?:task-start|prog)-(\d+)/))) return `prog-${m[1]}`;
+  if ((m = tag.match(/^(?:task-help|help)-(\d+)/))) return `help-${m[1]}`;
+  if ((m = tag.match(/^(?:task-helper|helper)-(\d+)/))) return `helper-${m[1]}`;
   return tag || ('notif-' + Date.now());
 }
 
 function markNotificationTagHandled(rawTag) {
   const canonical = normalizeNotificationTag(rawTag);
   sentNotificationKeys.add(canonical);
+  pushReceivedTags.add(canonical);
   if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
     try {
       navigator.serviceWorker.controller.postMessage({ type: 'REGISTER_TAG', tag: canonical });
@@ -344,6 +350,7 @@ async function ensureServiceWorker() {
           const canonical = normalizeNotificationTag(e.data.tag);
           const alreadySeen = sentNotificationKeys.has(canonical);
           sentNotificationKeys.add(canonical);
+          pushReceivedTags.add(canonical);
           if (!alreadySeen && document.visibilityState === 'visible') {
             playNotificationSound();
             showInAppNotificationBanner(e.data.title || '🔔 Objetivos · Wellness', e.data.body || '');
@@ -352,13 +359,14 @@ async function ensureServiceWorker() {
       });
     }
     if (!swRegPromise) {
-      swRegPromise = navigator.serviceWorker.register('./sw.js?v=6');
+      swRegPromise = navigator.serviceWorker.register('./sw.js?v=7');
     }
     const reg = await Promise.race([
       swRegPromise,
       new Promise((res) => setTimeout(() => res(null), 2500))
     ]);
     if (reg) {
+      try { reg.update(); } catch (e) {}
       if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
       const worker = reg.active || reg.installing || reg.waiting;
       if (worker && state.me && typeof SUPABASE_CONFIG !== 'undefined') {
@@ -476,7 +484,8 @@ async function requestNotificationPermission() {
       toast('¡Permiso del dispositivo concedido! 🎉', 'ok');
       await sendLocalNotification('🔔 Notificaciones del dispositivo activadas', {
         body: 'Recibirás alertas en tu dispositivo cuando se creen, tomen o finalicen tareas.',
-        tag: 'notif-welcome-' + Date.now()
+        tag: 'notif-welcome-' + Date.now(),
+        immediate: true
       });
       render();
       return true;
@@ -501,9 +510,11 @@ async function sendLocalNotification(title, options = {}) {
   const tag = normalizeNotificationTag(options.tag || ('notif-' + Date.now()));
   sentNotificationKeys.add(tag);
 
-  // 1. Emitir alerta visual flotante y sonido en la app
-  playNotificationSound();
-  showInAppNotificationBanner(title, options.body || '');
+  // 1. Emitir alerta visual flotante y sonido en la app cuando está visible
+  if (document.visibilityState === 'visible') {
+    playNotificationSound();
+    showInAppNotificationBanner(title, options.body || '');
+  }
 
   // 2. Verificar soporte y permiso del sistema operativo / navegador
   if (!('Notification' in window) || Notification.permission !== 'granted') return false;
@@ -519,38 +530,52 @@ async function sendLocalNotification(title, options = {}) {
     silent: false
   };
 
-  // 3. Delegar al Service Worker a través de su filtro anti-duplicados (evita que Web Push + Realtime suenen doble)
-  try {
-    const reg = await ensureServiceWorker();
-    const activeWorker = reg && (reg.active || navigator.serviceWorker.controller);
-    if (activeWorker) {
-      activeWorker.postMessage({
-        type: 'SHOW_NOTIFICATION',
-        title,
-        body: opts.body,
-        tag
-      });
-      return true;
-    } else if (reg && typeof reg.showNotification === 'function') {
-      await reg.showNotification(title, opts);
-      return true;
+  const triggerNativeSwNotification = async () => {
+    // Si ya llegó por Web Push mientras esperábamos, no enviar notificación local adicional
+    if (!options.immediate && pushReceivedTags.has(tag)) return true;
+    try {
+      const reg = await ensureServiceWorker();
+      const activeWorker = reg && (reg.active || navigator.serviceWorker.controller);
+      if (activeWorker) {
+        activeWorker.postMessage({
+          type: 'SHOW_NOTIFICATION',
+          title,
+          body: opts.body,
+          tag
+        });
+        return true;
+      } else if (reg && typeof reg.showNotification === 'function') {
+        await reg.showNotification(title, opts);
+        return true;
+      }
+    } catch (swErr) {
+      console.warn('SW showNotification fallback:', swErr);
     }
-  } catch (swErr) {
-    console.warn('SW showNotification fallback:', swErr);
+
+    try {
+      const n = new Notification(title, opts);
+      n.onclick = () => {
+        window.focus();
+        n.close();
+      };
+      return true;
+    } catch (err) {
+      return false;
+    }
+  };
+
+  // Si el dispositivo tiene Web Push activo y no es el botón de prueba, dar prioridad a Web Push (2.5s)
+  // y solo disparar local si Web Push no llegó, evitando cualquier notificación doble.
+  if (!options.immediate && hasWebPushSubscription) {
+    setTimeout(() => {
+      if (!pushReceivedTags.has(tag)) {
+        triggerNativeSwNotification();
+      }
+    }, 2500);
+    return true;
   }
 
-  // 4. Fallback a constructor Notification directo en escritorio si no hay SW
-  try {
-    const n = new Notification(title, opts);
-    n.onclick = () => {
-      window.focus();
-      n.close();
-    };
-    return true;
-  } catch (err) {
-    console.warn('Notification nativa fallback:', err);
-    return false;
-  }
+  return await triggerNativeSwNotification();
 }
 
 function makeTaskSnapshot(t) {
@@ -619,9 +644,9 @@ function detectTaskChangesAndNotify(newTasks) {
       anyChanged = true;
     }
 
-    // Caso 2: Tarea finalizada
+    // Caso 2: Tarea finalizada (usar tag 'done-${id}-terminada' idéntico a la Edge Function en Supabase)
     if (curr.status === 'terminada' && prev.status !== 'terminada') {
-      const key = `task-done-${t.id}`;
+      const key = `done-${t.id}-terminada`;
       if (!sentNotificationKeys.has(key)) {
         sentNotificationKeys.add(key);
         const finisher = t.completed_by ? userName(t.completed_by) : (t.assignee_id ? userName(t.assignee_id) : 'Un compañero');
@@ -635,7 +660,7 @@ function detectTaskChangesAndNotify(newTasks) {
 
     // Caso 3: Alguien tomó o fue asignado a la tarea
     if (curr.assignee_id && prev.assignee_id !== curr.assignee_id) {
-      const key = `task-take-${t.id}`;
+      const key = `taken-${t.id}`;
       if (!sentNotificationKeys.has(key)) {
         sentNotificationKeys.add(key);
         const taker = userName(curr.assignee_id);
@@ -648,7 +673,7 @@ function detectTaskChangesAndNotify(newTasks) {
 
     // Caso 4: Tarea puesta en progreso
     if (curr.status === 'en_progreso' && prev.status !== 'en_progreso') {
-      const key = `task-start-${t.id}`;
+      const key = `prog-${t.id}`;
       if (!sentNotificationKeys.has(key)) {
         sentNotificationKeys.add(key);
         const who = curr.assignee_id ? userName(curr.assignee_id) : 'Un compañero';
@@ -659,9 +684,9 @@ function detectTaskChangesAndNotify(newTasks) {
       }
     }
 
-    // Caso 5: Piden ayuda (SOS)
+    // Caso 5: Piden ayuda (SOS) (usar tag 'help-${id}' idéntico a la Edge Function en Supabase)
     if (curr.needs_help && !prev.needs_help) {
-      const key = `task-help-${t.id}`;
+      const key = `help-${t.id}`;
       if (!sentNotificationKeys.has(key)) {
         sentNotificationKeys.add(key);
         const asker = curr.assignee_id ? userName(curr.assignee_id) : 'Un compañero';
@@ -677,7 +702,7 @@ function detectTaskChangesAndNotify(newTasks) {
       const prevSet = new Set(prev.helper_ids ? prev.helper_ids.split(',').map(Number) : []);
       const newIds = curr.helper_ids.split(',').map(Number).filter((id) => id && !prevSet.has(id));
       if (newIds.length) {
-        const key = `task-helper-${t.id}`;
+        const key = `helper-${t.id}`;
         if (!sentNotificationKeys.has(key)) {
           sentNotificationKeys.add(key);
           const names = newIds.map(userName).join(', ');
@@ -1854,16 +1879,9 @@ document.addEventListener('click', async (e) => {
       const testTag = 'test-notif-' + Date.now();
       const sent = await sendLocalNotification('🔔 Prueba de notificación al dispositivo', {
         body: '¡Notificación activa! Tu dispositivo ya recibe alertas del equipo.',
-        tag: testTag
+        tag: testTag,
+        immediate: true
       });
-      if (state.me) {
-        dispatchRemoteWebPush({
-          title: '🔔 Prueba de notificación al dispositivo',
-          body: '¡Notificación activa! Tu dispositivo ya recibe alertas del equipo.',
-          tag: testTag,
-          targetUserIds: [state.me.id]
-        });
-      }
       if (sent) {
         toast('✅ Notificación de prueba enviada al dispositivo.', 'ok');
       }
@@ -1924,8 +1942,8 @@ document.addEventListener('click', async (e) => {
         patch.completed_at = null;
         patch.completed_by = null;
       }
-      if (status === 'terminada') markNotificationTagHandled(`task-done-${id}`);
-      else if (status === 'en_progreso') markNotificationTagHandled(`task-start-${id}`);
+      if (status === 'terminada') markNotificationTagHandled(`done-${id}-terminada`);
+      else if (status === 'en_progreso') markNotificationTagHandled(`prog-${id}`);
       run(async () => {
         const { error } = await sb.from('tasks').update(patch).eq('id', id);
         if (error) throw new Error(error.message);
@@ -1933,16 +1951,16 @@ document.addEventListener('click', async (e) => {
         if (!t.is_private && state.me) {
           if (status === 'terminada') {
             dispatchRemoteWebPush({
-              title: '✅ Tarea completada',
+              title: '✅ Tarea finalizada',
               body: `"${t.title}" fue finalizada por ${state.me.name}`,
-              tag: `task-done-${id}`,
+              tag: `done-${id}-terminada`,
               excludeUserId: state.me.id
             });
           } else if (status === 'en_progreso') {
             dispatchRemoteWebPush({
               title: '▶️ Tarea en progreso',
               body: `${state.me.name} comenzó "${t.title}"`,
-              tag: `task-start-${id}`,
+              tag: `prog-${id}`,
               excludeUserId: state.me.id
             });
           }
@@ -1954,7 +1972,7 @@ document.addEventListener('click', async (e) => {
       e.stopPropagation();
       closeSheet();
       const t = findItem('tasks', id);
-      markNotificationTagHandled(`task-take-${id}`);
+      markNotificationTagHandled(`taken-${id}`);
       run(async () => {
         const { error } = await sb.from('tasks').update({ assignee_id: state.me.id, updated_at: nowIso() }).eq('id', id);
         if (error) throw new Error(error.message);
@@ -1963,7 +1981,7 @@ document.addEventListener('click', async (e) => {
           dispatchRemoteWebPush({
             title: '✋ Tarea tomada',
             body: `${state.me.name} tomó la tarea "${t.title}"`,
-            tag: `task-take-${id}`,
+            tag: `taken-${id}`,
             excludeUserId: state.me.id
           });
         }
@@ -1977,7 +1995,7 @@ document.addEventListener('click', async (e) => {
       const currentHelpers = getHelperIds(t);
       if (!currentHelpers.includes(state.me.id)) {
         const nextHelpers = [...currentHelpers, state.me.id];
-        markNotificationTagHandled(`task-helper-${id}`);
+        markNotificationTagHandled(`helper-${id}`);
         run(async () => {
           const { error } = await sb.from('tasks').update({ helper_ids: nextHelpers, updated_at: nowIso() }).eq('id', id);
           if (error) throw new Error(error.message);
@@ -1986,7 +2004,7 @@ document.addEventListener('click', async (e) => {
             dispatchRemoteWebPush({
               title: '🤝 Nuevo ayudante en tarea',
               body: `${state.me.name} se unió a apoyar en "${t.title}"`,
-              tag: `task-helper-${id}`,
+              tag: `helper-${id}`,
               excludeUserId: state.me.id
             });
           }
@@ -2213,6 +2231,11 @@ document.addEventListener('submit', async (e) => {
 
     ok = await run(async () => {
       if (id) {
+        if (data.status === 'terminada') markNotificationTagHandled(`done-${id}-terminada`);
+        if (data.status === 'en_progreso') markNotificationTagHandled(`prog-${id}`);
+        if (data.needs_help) markNotificationTagHandled(`help-${id}`);
+        if (data.assignee_id) markNotificationTagHandled(`taken-${id}`);
+        markNotificationTagHandled(`helper-${id}`);
         const { error } = await sb.from('tasks').update(data).eq('id', id);
         if (error) throw new Error(error.message);
         await logActivity('editar', 'tarea', id, `Modificó la tarea "${data.title}"`);
@@ -2294,7 +2317,7 @@ document.addEventListener('submit', async (e) => {
   } else if (kind === 'help') {
     const t = findItem('tasks', id);
     const helpNote = fd.get('help_note') || '';
-    markNotificationTagHandled(`task-help-${id}`);
+    markNotificationTagHandled(`help-${id}`);
     ok = await run(async () => {
       const { error } = await sb.from('tasks').update({
         needs_help: true, help_note: helpNote, updated_at: nowIso()
@@ -2303,9 +2326,9 @@ document.addEventListener('submit', async (e) => {
       await logActivity('editar', 'tarea', id, `Pidió ayuda en "${t.title}"`);
       if (t && !t.is_private && state.me) {
         dispatchRemoteWebPush({
-          title: '🆘 Solicitud de ayuda en tarea',
+          title: '🆘 Piden ayuda con una tarea',
           body: `${state.me.name} necesita apoyo en "${t.title}"${helpNote ? ': ' + helpNote : ''}`,
-          tag: `task-help-${id}`,
+          tag: `help-${id}`,
           excludeUserId: state.me.id
         });
       }

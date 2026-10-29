@@ -1,5 +1,5 @@
 // Service Worker para PWA, notificaciones nativas al dispositivo y sincronización en segundo plano
-const CACHE_NAME = 'objetivos-v6';
+const CACHE_NAME = 'objetivos-v7';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -18,37 +18,48 @@ let swInitialLoaded = false;
 let swNotifiedDue = new Set();
 let swPollTimer = null;
 
-// Filtro anti-duplicados (evita que Web Push + Realtime/Background disparen 2 veces la misma alerta)
+// Filtro anti-duplicados (en memoria + consulta nativa al sistema operativo)
 const recentNotificationTags = new Map();
-const DEDUP_WINDOW_MS = 45000;
+const DEDUP_WINDOW_MS = 60000;
 
 function normalizeTag(rawTag) {
   const tag = String(rawTag || '');
-  // Unificar formatos equivalentes entre Web Push, Webhook y detector local
+  // Unificar a los mismos tags exactos que envía la Edge Function en Supabase y app.js
   let m;
   if ((m = tag.match(/^(?:task-new|new)-(\d+)/))) return `task-new-${m[1]}`;
-  if ((m = tag.match(/^(?:task-done|done)-(\d+)/))) return `task-done-${m[1]}`;
-  if ((m = tag.match(/^(?:task-take|taken)-(\d+)/))) return `task-take-${m[1]}`;
-  if ((m = tag.match(/^(?:task-start|prog)-(\d+)/))) return `task-start-${m[1]}`;
-  if ((m = tag.match(/^(?:task-help|help)-(\d+)/))) return `task-help-${m[1]}`;
-  if ((m = tag.match(/^(?:task-helper|helper)-(\d+)/))) return `task-helper-${m[1]}`;
+  if ((m = tag.match(/^(?:task-done|done)-(\d+)/))) return `done-${m[1]}-terminada`;
+  if ((m = tag.match(/^(?:task-take|taken)-(\d+)/))) return `taken-${m[1]}`;
+  if ((m = tag.match(/^(?:task-start|prog)-(\d+)/))) return `prog-${m[1]}`;
+  if ((m = tag.match(/^(?:task-help|help)-(\d+)/))) return `help-${m[1]}`;
+  if ((m = tag.match(/^(?:task-helper|helper)-(\d+)/))) return `helper-${m[1]}`;
   return tag || ('notif-' + Date.now());
 }
 
 async function showDedupedNotification(title, options = {}) {
   const now = Date.now();
-  // Limpiar entradas antiguas
   for (const [k, ts] of recentNotificationTags.entries()) {
     if (now - ts > DEDUP_WINDOW_MS) recentNotificationTags.delete(k);
   }
 
   const canonicalTag = normalizeTag(options.tag);
+
+  // 1. Verificar memoria reciente del Service Worker
   const lastShown = recentNotificationTags.get(canonicalTag);
   if (lastShown && now - lastShown < DEDUP_WINDOW_MS) {
-    // Ya se mostró esta misma notificación hace pocos segundos (evita notificación doble)
     return false;
   }
   recentNotificationTags.set(canonicalTag, now);
+
+  // 2. Verificar en la bandeja del sistema operativo si ya existe una notificación activa con este tag
+  // (Persiste incluso si el navegador reinició el proceso del Service Worker)
+  try {
+    if (self.registration && typeof self.registration.getNotifications === 'function') {
+      const existing = await self.registration.getNotifications({ tag: canonicalTag });
+      if (existing && existing.length > 0) {
+        return false;
+      }
+    }
+  } catch (e) {}
 
   await self.registration.showNotification(title, {
     body: options.body || '',
@@ -95,83 +106,31 @@ self.addEventListener('fetch', (e) => {
   );
 });
 
-// Verificación en segundo plano directamente desde el Service Worker hacia Supabase REST API
+// Verificación en segundo plano (respaldo únicamente para vencimientos próximos)
 async function checkSupabaseTasksInBackground() {
   if (!bgConfig || !bgConfig.url || !bgConfig.anonKey || !bgConfig.userId) return;
 
   try {
     const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const anyFocused = clientList.some((c) => c.focused || c.visibilityState === 'visible');
+    if (anyFocused) return;
 
     const headers = {
       apikey: bgConfig.anonKey,
       Authorization: `Bearer ${bgConfig.anonKey}`
     };
 
-    const [tRes, uRes] = await Promise.all([
-      fetch(`${bgConfig.url}/rest/v1/tasks?select=*`, { headers }),
-      fetch(`${bgConfig.url}/rest/v1/users?select=id,name`, { headers })
-    ]);
-
+    const tRes = await fetch(`${bgConfig.url}/rest/v1/tasks?select=*`, { headers });
     if (!tRes.ok) return;
     const tasks = await tRes.json();
-    const users = uRes.ok ? await uRes.json() : [];
-    const userMap = new Map(users.map((u) => [Number(u.id), u.name]));
-    const getName = (id) => userMap.get(Number(id)) || 'Un compañero';
     const myId = Number(bgConfig.userId);
 
-    if (!swInitialLoaded) {
-      for (const t of tasks) {
-        swKnownTasks.set(t.id, {
-          status: t.status,
-          assignee_id: t.assignee_id,
-          needs_help: Boolean(t.needs_help)
-        });
-      }
-      swInitialLoaded = true;
-      return;
-    }
-
-    // Si la ventana no está en primer plano, el Service Worker respalda las alertas
     for (const t of tasks) {
-      const prev = swKnownTasks.get(t.id);
-      swKnownTasks.set(t.id, {
-        status: t.status,
-        assignee_id: t.assignee_id,
-        needs_help: Boolean(t.needs_help)
-      });
-
       if (t.is_private && Number(t.created_by) !== myId) continue;
       if (!t.active) continue;
 
-      if (!anyFocused) {
-        if (!prev) {
-          await showDedupedNotification('📌 Nueva tarea creada', {
-            body: `${getName(t.created_by)} creó: "${t.title}"`,
-            tag: `task-new-${t.id}`
-          });
-        } else if (t.status === 'terminada' && prev.status !== 'terminada') {
-          const who = t.completed_by ? getName(t.completed_by) : getName(t.assignee_id);
-          await showDedupedNotification('✅ Tarea finalizada', {
-            body: `${who} terminó: "${t.title}"`,
-            tag: `task-done-${t.id}`
-          });
-        } else if (t.assignee_id && prev.assignee_id !== t.assignee_id) {
-          await showDedupedNotification('👤 Tarea tomada / asignada', {
-            body: `${getName(t.assignee_id)} tomó la tarea: "${t.title}"`,
-            tag: `task-take-${t.id}`
-          });
-        } else if (t.needs_help && !prev.needs_help) {
-          await showDedupedNotification('🆘 Piden ayuda con una tarea', {
-            body: `${getName(t.assignee_id)} necesita apoyo en: "${t.title}"`,
-            tag: `task-help-${t.id}`,
-            vibrate: [300, 100, 300, 100, 300]
-          });
-        }
-      }
-
       // Verificar vencimiento próximo en segundo plano
-      if (!anyFocused && t.status !== 'terminada' && t.due_at) {
+      if (t.status !== 'terminada' && t.due_at) {
         const dueMs = new Date(t.due_at).getTime();
         if (!isNaN(dueMs)) {
           const diffMin = Math.round((dueMs - Date.now()) / 60000);
@@ -218,9 +177,8 @@ self.addEventListener('message', (e) => {
       userRole: data.userRole
     };
     if (!swPollTimer) {
-      swPollTimer = setInterval(checkSupabaseTasksInBackground, 15000);
+      swPollTimer = setInterval(checkSupabaseTasksInBackground, 30000);
     }
-    checkSupabaseTasksInBackground();
   }
 });
 
@@ -248,7 +206,7 @@ self.addEventListener('push', (e) => {
 
   e.waitUntil(
     (async () => {
-      // Avisar a las ventanas abiertas que este tag ya fue cubierto por Push para que Realtime no lo duplique
+      // Avisar a las ventanas abiertas que este tag ya llegó por Push
       const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       for (const client of clientList) {
         client.postMessage({

@@ -69,16 +69,16 @@ Deno.serve(async (req: Request) => {
         if (row.status === "terminada" && old.status !== "terminada") {
           title = "✅ Tarea finalizada";
           body = `Se completó la tarea: "${row.title}"`;
-          tag = `task-done-${row.id}`;
+          tag = `done-${row.id}-terminada`;
           if (row.completed_by && !row.is_private) excludeUserId = Number(row.completed_by);
         } else if (row.assignee_id && row.assignee_id !== old.assignee_id) {
           title = "👤 Tarea tomada / asignada";
           body = `Tarea asignada: "${row.title}"`;
-          tag = `task-take-${row.id}`;
+          tag = `taken-${row.id}`;
         } else if (row.needs_help && !old.needs_help) {
           title = "🆘 Piden ayuda con una tarea";
           body = `Necesitan apoyo en: "${row.title}"${row.help_note ? " (" + row.help_note + ")" : ""}`;
-          tag = `task-help-${row.id}`;
+          tag = `help-${row.id}`;
         } else {
           return new Response(JSON.stringify({ skipped: true }), {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
