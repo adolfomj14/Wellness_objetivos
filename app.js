@@ -308,12 +308,51 @@ async function dispatchRemoteWebPush({ title, body, tag, targetUserIds = null, e
   }
 }
 
+// Normaliza cualquier variante de tag para que Web Push, Realtime y Service Worker compartan exactamente la misma clave
+function normalizeNotificationTag(rawTag) {
+  const tag = String(rawTag || '');
+  let m;
+  if ((m = tag.match(/^(?:task-new|new)-(\d+)/))) return `task-new-${m[1]}`;
+  if ((m = tag.match(/^(?:task-done|done)-(\d+)/))) return `task-done-${m[1]}`;
+  if ((m = tag.match(/^(?:task-take|taken)-(\d+)/))) return `task-take-${m[1]}`;
+  if ((m = tag.match(/^(?:task-start|prog)-(\d+)/))) return `task-start-${m[1]}`;
+  if ((m = tag.match(/^(?:task-help|help)-(\d+)/))) return `task-help-${m[1]}`;
+  if ((m = tag.match(/^(?:task-helper|helper)-(\d+)/))) return `task-helper-${m[1]}`;
+  return tag || ('notif-' + Date.now());
+}
+
+function markNotificationTagHandled(rawTag) {
+  const canonical = normalizeNotificationTag(rawTag);
+  sentNotificationKeys.add(canonical);
+  if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+    try {
+      navigator.serviceWorker.controller.postMessage({ type: 'REGISTER_TAG', tag: canonical });
+    } catch (e) {}
+  }
+}
+
+let swMessageListenerBound = false;
+
 // Registra y activa inmediatamente el Service Worker (vital para notificaciones nativas en Android / PWA)
 async function ensureServiceWorker() {
   if (!('serviceWorker' in navigator)) return null;
   try {
+    if (!swMessageListenerBound) {
+      swMessageListenerBound = true;
+      navigator.serviceWorker.addEventListener('message', (e) => {
+        if (e.data && e.data.type === 'PUSH_RECEIVED' && e.data.tag) {
+          const canonical = normalizeNotificationTag(e.data.tag);
+          const alreadySeen = sentNotificationKeys.has(canonical);
+          sentNotificationKeys.add(canonical);
+          if (!alreadySeen && document.visibilityState === 'visible') {
+            playNotificationSound();
+            showInAppNotificationBanner(e.data.title || '🔔 Objetivos · Wellness', e.data.body || '');
+          }
+        }
+      });
+    }
     if (!swRegPromise) {
-      swRegPromise = navigator.serviceWorker.register('./sw.js?v=5');
+      swRegPromise = navigator.serviceWorker.register('./sw.js?v=6');
     }
     const reg = await Promise.race([
       swRegPromise,
@@ -459,6 +498,9 @@ async function requestNotificationPermission() {
 async function sendLocalNotification(title, options = {}) {
   if (isNotificationsMuted() || !state.me) return false;
 
+  const tag = normalizeNotificationTag(options.tag || ('notif-' + Date.now()));
+  sentNotificationKeys.add(tag);
+
   // 1. Emitir alerta visual flotante y sonido en la app
   playNotificationSound();
   showInAppNotificationBanner(title, options.body || '');
@@ -466,26 +508,22 @@ async function sendLocalNotification(title, options = {}) {
   // 2. Verificar soporte y permiso del sistema operativo / navegador
   if (!('Notification' in window) || Notification.permission !== 'granted') return false;
 
-  const tag = options.tag || ('notif-' + Date.now());
   const opts = {
     body: options.body || '',
     icon: './icon-192.png',
     badge: './icon-192.png',
-    vibrate: [200, 100, 200, 100, 200],
+    vibrate: [200, 100, 200],
     tag,
-    renotify: true,
+    renotify: false,
     requireInteraction: false,
     silent: false
   };
 
-  // 3. Priorizar Service Worker (obligatorio en Android y PWAs instaladas)
+  // 3. Delegar al Service Worker a través de su filtro anti-duplicados (evita que Web Push + Realtime suenen doble)
   try {
     const reg = await ensureServiceWorker();
     const activeWorker = reg && (reg.active || navigator.serviceWorker.controller);
-    if (reg && reg.active && typeof reg.showNotification === 'function') {
-      await reg.showNotification(title, opts);
-      return true;
-    } else if (activeWorker) {
+    if (activeWorker) {
       activeWorker.postMessage({
         type: 'SHOW_NOTIFICATION',
         title,
@@ -493,12 +531,15 @@ async function sendLocalNotification(title, options = {}) {
         tag
       });
       return true;
+    } else if (reg && typeof reg.showNotification === 'function') {
+      await reg.showNotification(title, opts);
+      return true;
     }
   } catch (swErr) {
     console.warn('SW showNotification fallback:', swErr);
   }
 
-  // 4. Fallback a constructor Notification directo en escritorio
+  // 4. Fallback a constructor Notification directo en escritorio si no hay SW
   try {
     const n = new Notification(title, opts);
     n.onclick = () => {
@@ -555,7 +596,7 @@ function detectTaskChangesAndNotify(newTasks) {
     // Caso 1: Nueva tarea creada
     if (!prev) {
       anyChanged = true;
-      const key = `new-${t.id}`;
+      const key = `task-new-${t.id}`;
       if (!sentNotificationKeys.has(key)) {
         sentNotificationKeys.add(key);
         const creator = t.created_by ? userName(t.created_by) : 'Alguien';
@@ -580,7 +621,7 @@ function detectTaskChangesAndNotify(newTasks) {
 
     // Caso 2: Tarea finalizada
     if (curr.status === 'terminada' && prev.status !== 'terminada') {
-      const key = `done-${t.id}-${curr.status}`;
+      const key = `task-done-${t.id}`;
       if (!sentNotificationKeys.has(key)) {
         sentNotificationKeys.add(key);
         const finisher = t.completed_by ? userName(t.completed_by) : (t.assignee_id ? userName(t.assignee_id) : 'Un compañero');
@@ -594,7 +635,7 @@ function detectTaskChangesAndNotify(newTasks) {
 
     // Caso 3: Alguien tomó o fue asignado a la tarea
     if (curr.assignee_id && prev.assignee_id !== curr.assignee_id) {
-      const key = `taken-${t.id}-${curr.assignee_id}`;
+      const key = `task-take-${t.id}`;
       if (!sentNotificationKeys.has(key)) {
         sentNotificationKeys.add(key);
         const taker = userName(curr.assignee_id);
@@ -607,7 +648,7 @@ function detectTaskChangesAndNotify(newTasks) {
 
     // Caso 4: Tarea puesta en progreso
     if (curr.status === 'en_progreso' && prev.status !== 'en_progreso') {
-      const key = `prog-${t.id}`;
+      const key = `task-start-${t.id}`;
       if (!sentNotificationKeys.has(key)) {
         sentNotificationKeys.add(key);
         const who = curr.assignee_id ? userName(curr.assignee_id) : 'Un compañero';
@@ -620,7 +661,7 @@ function detectTaskChangesAndNotify(newTasks) {
 
     // Caso 5: Piden ayuda (SOS)
     if (curr.needs_help && !prev.needs_help) {
-      const key = `help-${t.id}`;
+      const key = `task-help-${t.id}`;
       if (!sentNotificationKeys.has(key)) {
         sentNotificationKeys.add(key);
         const asker = curr.assignee_id ? userName(curr.assignee_id) : 'Un compañero';
@@ -636,7 +677,7 @@ function detectTaskChangesAndNotify(newTasks) {
       const prevSet = new Set(prev.helper_ids ? prev.helper_ids.split(',').map(Number) : []);
       const newIds = curr.helper_ids.split(',').map(Number).filter((id) => id && !prevSet.has(id));
       if (newIds.length) {
-        const key = `helper-${t.id}-${newIds.join('_')}`;
+        const key = `task-helper-${t.id}`;
         if (!sentNotificationKeys.has(key)) {
           sentNotificationKeys.add(key);
           const names = newIds.map(userName).join(', ');
@@ -1810,26 +1851,21 @@ document.addEventListener('click', async (e) => {
       }
       const reg = await ensureServiceWorker();
       if (reg) await subscribeDeviceToWebPush(reg);
+      const testTag = 'test-notif-' + Date.now();
       const sent = await sendLocalNotification('🔔 Prueba de notificación al dispositivo', {
-        body: '¡Notificación activa! Minimiza o bloquea el teléfono ahora: en 4 segundos te llegará una alerta Push.',
-        tag: 'test-notif-' + Date.now()
+        body: '¡Notificación activa! Tu dispositivo ya recibe alertas del equipo.',
+        tag: testTag
       });
+      if (state.me) {
+        dispatchRemoteWebPush({
+          title: '🔔 Prueba de notificación al dispositivo',
+          body: '¡Notificación activa! Tu dispositivo ya recibe alertas del equipo.',
+          tag: testTag,
+          targetUserIds: [state.me.id]
+        });
+      }
       if (sent) {
-        toast('✅ Enviada. Minimiza o cierra la app: en 4s llegará la alerta Push.', 'ok');
-        setTimeout(() => {
-          sendLocalNotification('📲 Alerta en tu dispositivo', {
-            body: '¡Funciona! Tu dispositivo recibe alertas aunque estés fuera de la ventana.',
-            tag: 'test-bg-' + Date.now()
-          });
-          if (state.me) {
-            dispatchRemoteWebPush({
-              title: '📲 Alerta Web Push en tu dispositivo',
-              body: '¡Conexión Web Push activa! Recibirás alertas aunque la app esté cerrada.',
-              tag: 'test-webpush-' + Date.now(),
-              targetUserIds: [state.me.id]
-            });
-          }
-        }, 4000);
+        toast('✅ Notificación de prueba enviada al dispositivo.', 'ok');
       }
       render();
       break;
@@ -1888,6 +1924,8 @@ document.addEventListener('click', async (e) => {
         patch.completed_at = null;
         patch.completed_by = null;
       }
+      if (status === 'terminada') markNotificationTagHandled(`task-done-${id}`);
+      else if (status === 'en_progreso') markNotificationTagHandled(`task-start-${id}`);
       run(async () => {
         const { error } = await sb.from('tasks').update(patch).eq('id', id);
         if (error) throw new Error(error.message);
@@ -1916,6 +1954,7 @@ document.addEventListener('click', async (e) => {
       e.stopPropagation();
       closeSheet();
       const t = findItem('tasks', id);
+      markNotificationTagHandled(`task-take-${id}`);
       run(async () => {
         const { error } = await sb.from('tasks').update({ assignee_id: state.me.id, updated_at: nowIso() }).eq('id', id);
         if (error) throw new Error(error.message);
@@ -1938,6 +1977,7 @@ document.addEventListener('click', async (e) => {
       const currentHelpers = getHelperIds(t);
       if (!currentHelpers.includes(state.me.id)) {
         const nextHelpers = [...currentHelpers, state.me.id];
+        markNotificationTagHandled(`task-helper-${id}`);
         run(async () => {
           const { error } = await sb.from('tasks').update({ helper_ids: nextHelpers, updated_at: nowIso() }).eq('id', id);
           if (error) throw new Error(error.message);
@@ -1946,7 +1986,7 @@ document.addEventListener('click', async (e) => {
             dispatchRemoteWebPush({
               title: '🤝 Nuevo ayudante en tarea',
               body: `${state.me.name} se unió a apoyar en "${t.title}"`,
-              tag: `task-helper-${id}-${state.me.id}`,
+              tag: `task-helper-${id}`,
               excludeUserId: state.me.id
             });
           }
@@ -2181,6 +2221,7 @@ document.addEventListener('submit', async (e) => {
         data.created_at = nowIso();
         const { data: created, error } = await sb.from('tasks').insert([data]).select().single();
         if (error) throw new Error(error.message);
+        markNotificationTagHandled(`task-new-${created.id}`);
         await logActivity('crear', 'tarea', created.id, `Creó la tarea "${data.title}"`);
         if (!data.is_private && state.me) {
           const assigneeLabel = data.assignee_id ? userName(data.assignee_id) : 'Sin asignar';
@@ -2253,6 +2294,7 @@ document.addEventListener('submit', async (e) => {
   } else if (kind === 'help') {
     const t = findItem('tasks', id);
     const helpNote = fd.get('help_note') || '';
+    markNotificationTagHandled(`task-help-${id}`);
     ok = await run(async () => {
       const { error } = await sb.from('tasks').update({
         needs_help: true, help_note: helpNote, updated_at: nowIso()

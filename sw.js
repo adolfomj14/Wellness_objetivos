@@ -1,5 +1,5 @@
 // Service Worker para PWA, notificaciones nativas al dispositivo y sincronización en segundo plano
-const CACHE_NAME = 'objetivos-v5';
+const CACHE_NAME = 'objetivos-v6';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -17,6 +17,50 @@ let swKnownTasks = new Map();
 let swInitialLoaded = false;
 let swNotifiedDue = new Set();
 let swPollTimer = null;
+
+// Filtro anti-duplicados (evita que Web Push + Realtime/Background disparen 2 veces la misma alerta)
+const recentNotificationTags = new Map();
+const DEDUP_WINDOW_MS = 45000;
+
+function normalizeTag(rawTag) {
+  const tag = String(rawTag || '');
+  // Unificar formatos equivalentes entre Web Push, Webhook y detector local
+  let m;
+  if ((m = tag.match(/^(?:task-new|new)-(\d+)/))) return `task-new-${m[1]}`;
+  if ((m = tag.match(/^(?:task-done|done)-(\d+)/))) return `task-done-${m[1]}`;
+  if ((m = tag.match(/^(?:task-take|taken)-(\d+)/))) return `task-take-${m[1]}`;
+  if ((m = tag.match(/^(?:task-start|prog)-(\d+)/))) return `task-start-${m[1]}`;
+  if ((m = tag.match(/^(?:task-help|help)-(\d+)/))) return `task-help-${m[1]}`;
+  if ((m = tag.match(/^(?:task-helper|helper)-(\d+)/))) return `task-helper-${m[1]}`;
+  return tag || ('notif-' + Date.now());
+}
+
+async function showDedupedNotification(title, options = {}) {
+  const now = Date.now();
+  // Limpiar entradas antiguas
+  for (const [k, ts] of recentNotificationTags.entries()) {
+    if (now - ts > DEDUP_WINDOW_MS) recentNotificationTags.delete(k);
+  }
+
+  const canonicalTag = normalizeTag(options.tag);
+  const lastShown = recentNotificationTags.get(canonicalTag);
+  if (lastShown && now - lastShown < DEDUP_WINDOW_MS) {
+    // Ya se mostró esta misma notificación hace pocos segundos (evita notificación doble)
+    return false;
+  }
+  recentNotificationTags.set(canonicalTag, now);
+
+  await self.registration.showNotification(title, {
+    body: options.body || '',
+    icon: './icon-192.png',
+    badge: './icon-192.png',
+    vibrate: options.vibrate || [200, 100, 200],
+    tag: canonicalTag,
+    renotify: false,
+    requireInteraction: false
+  });
+  return true;
+}
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();
@@ -56,10 +100,9 @@ async function checkSupabaseTasksInBackground() {
   if (!bgConfig || !bgConfig.url || !bgConfig.anonKey || !bgConfig.userId) return;
 
   try {
-    // Verificar si alguna ventana de la app está visible en primer plano
     const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const anyFocused = clientList.some((c) => c.focused || c.visibilityState === 'visible');
-    // Aún si está en segundo plano o cerrada la pestaña, consultamos Supabase
+
     const headers = {
       apikey: bgConfig.anonKey,
       Authorization: `Bearer ${bgConfig.anonKey}`
@@ -89,7 +132,7 @@ async function checkSupabaseTasksInBackground() {
       return;
     }
 
-    // Si la ventana no está en primer plano, el Service Worker dispara la notificación nativa al dispositivo
+    // Si la ventana no está en primer plano, el Service Worker respalda las alertas
     for (const t of tasks) {
       const prev = swKnownTasks.get(t.id);
       swKnownTasks.set(t.id, {
@@ -103,41 +146,26 @@ async function checkSupabaseTasksInBackground() {
 
       if (!anyFocused) {
         if (!prev) {
-          await self.registration.showNotification('📌 Nueva tarea creada', {
+          await showDedupedNotification('📌 Nueva tarea creada', {
             body: `${getName(t.created_by)} creó: "${t.title}"`,
-            icon: './icon-192.png',
-            badge: './icon-192.png',
-            vibrate: [200, 100, 200],
-            tag: `task-new-${t.id}`,
-            renotify: true
+            tag: `task-new-${t.id}`
           });
         } else if (t.status === 'terminada' && prev.status !== 'terminada') {
           const who = t.completed_by ? getName(t.completed_by) : getName(t.assignee_id);
-          await self.registration.showNotification('✅ Tarea finalizada', {
+          await showDedupedNotification('✅ Tarea finalizada', {
             body: `${who} terminó: "${t.title}"`,
-            icon: './icon-192.png',
-            badge: './icon-192.png',
-            vibrate: [200, 100, 200],
-            tag: `done-${t.id}-terminada`,
-            renotify: true
+            tag: `task-done-${t.id}`
           });
         } else if (t.assignee_id && prev.assignee_id !== t.assignee_id) {
-          await self.registration.showNotification('👤 Tarea tomada / asignada', {
+          await showDedupedNotification('👤 Tarea tomada / asignada', {
             body: `${getName(t.assignee_id)} tomó la tarea: "${t.title}"`,
-            icon: './icon-192.png',
-            badge: './icon-192.png',
-            vibrate: [200, 100, 200],
-            tag: `taken-${t.id}-${t.assignee_id}`,
-            renotify: true
+            tag: `task-take-${t.id}`
           });
         } else if (t.needs_help && !prev.needs_help) {
-          await self.registration.showNotification('🆘 Piden ayuda con una tarea', {
+          await showDedupedNotification('🆘 Piden ayuda con una tarea', {
             body: `${getName(t.assignee_id)} necesita apoyo en: "${t.title}"`,
-            icon: './icon-192.png',
-            badge: './icon-192.png',
-            vibrate: [300, 100, 300, 100, 300],
-            tag: `help-${t.id}`,
-            renotify: true
+            tag: `task-help-${t.id}`,
+            vibrate: [300, 100, 300, 100, 300]
           });
         }
       }
@@ -149,13 +177,10 @@ async function checkSupabaseTasksInBackground() {
           const diffMin = Math.round((dueMs - Date.now()) / 60000);
           if (diffMin > 0 && diffMin <= 30 && !swNotifiedDue.has(`${t.id}_30`)) {
             swNotifiedDue.add(`${t.id}_30`);
-            await self.registration.showNotification(`⏰ Tarea por vencer (${diffMin} min)`, {
+            await showDedupedNotification(`⏰ Tarea por vencer (${diffMin} min)`, {
               body: `"${t.title}" está próxima a vencer.`,
-              icon: './icon-192.png',
-              badge: './icon-192.png',
-              vibrate: [250, 100, 250],
               tag: `task-due-${t.id}`,
-              renotify: true
+              vibrate: [250, 100, 250]
             });
           }
         }
@@ -175,16 +200,16 @@ self.addEventListener('message', (e) => {
     self.skipWaiting();
   } else if (data.type === 'SHOW_NOTIFICATION') {
     const title = data.title || '🔔 Objetivos · Wellness';
-    const opts = {
-      body: data.body || '',
-      icon: './icon-192.png',
-      badge: './icon-192.png',
-      vibrate: [200, 100, 200, 100, 200],
-      tag: data.tag || ('notif-' + Date.now()),
-      renotify: true,
-      requireInteraction: false
-    };
-    e.waitUntil(self.registration.showNotification(title, opts));
+    e.waitUntil(
+      showDedupedNotification(title, {
+        body: data.body || '',
+        tag: data.tag || ('notif-' + Date.now())
+      })
+    );
+  } else if (data.type === 'REGISTER_TAG') {
+    if (data.tag) {
+      recentNotificationTags.set(normalizeTag(data.tag), Date.now());
+    }
   } else if (data.type === 'INIT_BG_SYNC') {
     bgConfig = {
       url: data.url,
@@ -218,15 +243,26 @@ self.addEventListener('push', (e) => {
   } catch (err) {
     if (e.data) payload.body = e.data.text();
   }
+
+  const canonicalTag = normalizeTag(payload.tag);
+
   e.waitUntil(
-    self.registration.showNotification(payload.title, {
-      body: payload.body,
-      icon: './icon-192.png',
-      badge: './icon-192.png',
-      vibrate: [200, 100, 200, 100, 200],
-      tag: payload.tag,
-      renotify: true
-    })
+    (async () => {
+      // Avisar a las ventanas abiertas que este tag ya fue cubierto por Push para que Realtime no lo duplique
+      const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const client of clientList) {
+        client.postMessage({
+          type: 'PUSH_RECEIVED',
+          tag: canonicalTag,
+          title: payload.title,
+          body: payload.body
+        });
+      }
+      await showDedupedNotification(payload.title, {
+        body: payload.body,
+        tag: canonicalTag
+      });
+    })()
   );
 });
 

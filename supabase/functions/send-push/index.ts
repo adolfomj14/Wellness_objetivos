@@ -62,19 +62,23 @@ Deno.serve(async (req: Request) => {
         title = "📌 Nueva tarea en el equipo";
         body = `Se creó la tarea: "${row.title}"`;
         tag = `task-new-${row.id}`;
+        if (row.created_by && !row.is_private) {
+          excludeUserId = Number(row.created_by);
+        }
       } else if (payload.type === "UPDATE") {
         if (row.status === "terminada" && old.status !== "terminada") {
           title = "✅ Tarea finalizada";
           body = `Se completó la tarea: "${row.title}"`;
-          tag = `done-${row.id}-terminada`;
+          tag = `task-done-${row.id}`;
+          if (row.completed_by && !row.is_private) excludeUserId = Number(row.completed_by);
         } else if (row.assignee_id && row.assignee_id !== old.assignee_id) {
           title = "👤 Tarea tomada / asignada";
           body = `Tarea asignada: "${row.title}"`;
-          tag = `taken-${row.id}-${row.assignee_id}`;
+          tag = `task-take-${row.id}`;
         } else if (row.needs_help && !old.needs_help) {
           title = "🆘 Piden ayuda con una tarea";
           body = `Necesitan apoyo en: "${row.title}"${row.help_note ? " (" + row.help_note + ")" : ""}`;
-          tag = `help-${row.id}`;
+          tag = `task-help-${row.id}`;
         } else {
           return new Response(JSON.stringify({ skipped: true }), {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -95,11 +99,19 @@ Deno.serve(async (req: Request) => {
     const { data: subs, error } = await query;
     if (error) throw error;
 
+    // Deduplicar por endpoint por seguridad
+    const seenEndpoints = new Set<string>();
+    const uniqueSubs = (subs || []).filter((s: any) => {
+      if (!s.endpoint || seenEndpoints.has(s.endpoint)) return false;
+      seenEndpoints.add(s.endpoint);
+      return true;
+    });
+
     const pushPayload = JSON.stringify({ title, body, tag });
     let sent = 0;
     let removed = 0;
 
-    for (const sub of subs || []) {
+    for (const sub of uniqueSubs) {
       const pushSubscription = {
         endpoint: sub.endpoint,
         keys: {
