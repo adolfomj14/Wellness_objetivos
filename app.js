@@ -29,6 +29,17 @@ const ROLE = { admin: 'Administrador', lider: 'Líder', colaborador: 'Colaborado
 const WEEKDAYS = [['1', 'L'], ['2', 'M'], ['3', 'X'], ['4', 'J'], ['5', 'V'], ['6', 'S'], ['7', 'D']];
 const URG_RANK = { overdue: 0, critical: 1, soon: 2, near: 3, ok: 4, none: 5, done: 6 };
 
+const ZONES = [
+  { id: 'Wellness', label: '🧘 Wellness' },
+  { id: 'Movilidad / Bicis', label: '🚲 Movilidad / Bicis' },
+  { id: 'Taller', label: '🔧 Taller' },
+  { id: 'Fitness', label: '🏋️ Fitness' },
+  { id: 'Running', label: '👟 Running' },
+  { id: 'Bodega / Stock', label: '📦 Bodega / Stock' },
+  { id: 'Caja / Lineal', label: '🛒 Caja / Lineal' },
+];
+const ZONE_MAP = Object.fromEntries(ZONES.map((z) => [z.id, z.label]));
+
 const ICON = {
   today: '<svg viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"/></svg>',
   board: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="18" rx="1.5"/><rect x="14" y="3" width="7" height="11" rx="1.5"/></svg>',
@@ -55,6 +66,13 @@ const ICON = {
   unlock: '<svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>',
   bell: '<svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>',
   bellOff: '<svg viewBox="0 0 24 24"><path d="M13.73 21a2 2 0 0 1-3.46 0"/><path d="M18.63 13A17.89 17.89 0 0 1 18 8"/><path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"/><line x1="1" y1="1" x2="23" y2="23"/></svg>',
+  camera: '<svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>',
+  chat: '<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+  moon: '<svg viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
+  sun: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>',
+  trophy: '<svg viewBox="0 0 24 24"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>',
+  key: '<svg viewBox="0 0 24 24"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>',
+  clipboard: '<svg viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>',
 };
 
 /* ---------- Estado local ---------- */
@@ -63,11 +81,22 @@ const state = {
   users: [], objectives: [], tasks: [], routines: [], activity: [],
   view: localStorage.getItem('obj_view') || 'hoy',
   more: 'menu',
-  filters: { person: '', objective: '', status: 'sin_iniciar', activityUser: '' },
+  filters: { person: '', objective: '', zone: '', status: 'sin_iniciar', activityUser: '' },
   sheetOpen: false,
   showAllDoneToday: false,
   boardDoneFilter: 'recientes', // 'recientes' (últimas 5 o de hoy) | 'semana' (últimos 7 días) | 'todas'
+  theme: localStorage.getItem('obj_theme') || 'light',
+  notifMode: localStorage.getItem('obj_notif_mode') || 'all', // 'all' | 'mine'
+  isOnline: navigator.onLine !== false,
+  offlineQueue: JSON.parse(localStorage.getItem('obj_offline_queue') || '[]'),
+  draftSubtasks: [],
+  draftPhotos: [],
 };
+
+// Aplicar tema inmediatamente
+if (state.theme === 'dark') {
+  document.documentElement.setAttribute('data-theme', 'dark');
+}
 
 /* ---------- Utilidades ---------- */
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -222,6 +251,137 @@ const canFullEditTask = (t) => {
 const canHideTask = (t) => canEditTask(t);
 const canTogglePrivacy = (t) => Boolean(t.id && hasPrivateTasks() && t.created_by === (state.me && state.me.id));
 
+/* ---------- Helpers para Subtareas, Comentarios, Fotos, Zonas, PIN y Tema ---------- */
+function getLocalExtrasMap() {
+  try { return JSON.parse(localStorage.getItem('obj_task_extras') || '{}'); } catch (e) { return {}; }
+}
+function saveLocalTaskExtra(taskId, patch) {
+  if (!taskId) return;
+  const map = getLocalExtrasMap();
+  map[taskId] = { ...(map[taskId] || {}), ...patch };
+  try { localStorage.setItem('obj_task_extras', JSON.stringify(map)); } catch (e) {}
+}
+function getSubtasks(t) {
+  if (!t) return [];
+  if (Array.isArray(t.subtasks) && t.subtasks.length) return t.subtasks;
+  const loc = getLocalExtrasMap()[t.id];
+  return (loc && Array.isArray(loc.subtasks)) ? loc.subtasks : (Array.isArray(t.subtasks) ? t.subtasks : []);
+}
+function getComments(t) {
+  if (!t) return [];
+  if (Array.isArray(t.comments) && t.comments.length) return t.comments;
+  const loc = getLocalExtrasMap()[t.id];
+  return (loc && Array.isArray(loc.comments)) ? loc.comments : (Array.isArray(t.comments) ? t.comments : []);
+}
+function getPhotos(t) {
+  if (!t) return [];
+  if (Array.isArray(t.photos) && t.photos.length) return t.photos;
+  const loc = getLocalExtrasMap()[t.id];
+  return (loc && Array.isArray(loc.photos)) ? loc.photos : (Array.isArray(t.photos) ? t.photos : []);
+}
+function getTaskZone(t) {
+  if (!t) return '';
+  if (t.zone) return t.zone;
+  const loc = getLocalExtrasMap()[t.id];
+  return (loc && loc.zone) ? loc.zone : '';
+}
+function getUserPin(u) {
+  if (!u) return '';
+  if (u.pin_code !== undefined && u.pin_code !== null) return String(u.pin_code);
+  try {
+    const pins = JSON.parse(localStorage.getItem('obj_user_pins') || '{}');
+    return pins[u.id] ? String(pins[u.id]) : '';
+  } catch (e) { return ''; }
+}
+function saveUserPinLocal(uid, pin) {
+  try {
+    const pins = JSON.parse(localStorage.getItem('obj_user_pins') || '{}');
+    if (pin) pins[uid] = String(pin);
+    else delete pins[uid];
+    localStorage.setItem('obj_user_pins', JSON.stringify(pins));
+  } catch (e) {}
+}
+
+function toggleTheme() {
+  state.theme = state.theme === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('obj_theme', state.theme);
+  if (state.theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+  else document.documentElement.removeAttribute('data-theme');
+  render();
+}
+
+// Comprime una foto desde cámara/galería usando Canvas (máx 820px, JPEG 0.72) para guardar rápido sin configurar buckets externos
+function compressImageFile(file, maxDim = 820, quality = 0.72) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new Image();
+      img.onload = () => {
+        let w = img.width, h = img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) { h = Math.round((h * maxDim) / w); w = maxDim; }
+          else { w = Math.round((w * maxDim) / h); h = maxDim; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = () => reject(new Error('No se pudo procesar la imagen.'));
+      img.src = ev.target.result;
+    };
+    reader.onerror = () => reject(new Error('Error leyendo archivo de imagen.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function openPhotoLightbox(url, caption = '') {
+  const existing = document.getElementById('photo-lightbox');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'photo-lightbox';
+  overlay.className = 'lightbox-overlay';
+  overlay.innerHTML = `
+    <img src="${esc(url)}" alt="Evidencia">
+    ${caption ? `<div class="lightbox-caption"><b>${esc(caption)}</b></div>` : ''}
+    <button type="button" class="btn btn-sm" style="margin-top:14px;background:#fff;color:#111">✕ Cerrar vista</button>
+  `;
+  overlay.addEventListener('click', () => overlay.remove());
+  document.body.appendChild(overlay);
+}
+
+// Filtro de notificaciones dirigidas: si el usuario eligió 'mine', solo notifica si la tarea es suya, es ayudante o es SOS
+function shouldNotifyMeForTask(t, isSos = false) {
+  if (!state.me) return false;
+  if (state.notifMode !== 'mine') return true;
+  if (isSos || Boolean(t.needs_help)) return true;
+  const myId = Number(state.me.id);
+  return Number(t.assignee_id) === myId || getHelperIds(t).includes(myId) || Number(t.created_by) === myId;
+}
+
+// Calcula el ranking de compañerismo (quiénes más han apoyado tareas como ayudantes)
+function getCompanerismoStats() {
+  const allPublic = state.tasks.filter((t) => t.active && !t.is_private);
+  const stats = activeUsers().map((u) => {
+    const helpedTasks = allPublic.filter((t) => getHelperIds(t).includes(u.id) && t.assignee_id !== u.id);
+    const helpedDone = helpedTasks.filter((t) => t.status === 'terminada');
+    const helpedMinutes = helpedTasks.reduce((s, t) => s + (t.estimated_minutes || 0), 0);
+    // Puntaje: 2 puntos por tarea apoyada terminada + 1 punto por tarea apoyada en curso
+    const score = helpedDone.length * 2 + (helpedTasks.length - helpedDone.length);
+    return {
+      user: u,
+      totalHelped: helpedTasks.length,
+      doneHelped: helpedDone.length,
+      helpedMinutes,
+      score
+    };
+  }).filter((x) => x.totalHelped > 0)
+    .sort((a, b) => b.score - a.score || b.doneHelped - a.doneHelped || b.helpedMinutes - a.helpedMinutes);
+  return stats;
+}
+
 /* ---------- Sistema de Notificaciones del Equipo + Web Push (VAPID) ---------- */
 const notifiedDueAlerts = new Set();
 const sentNotificationKeys = new Set();
@@ -359,7 +519,7 @@ async function ensureServiceWorker() {
       });
     }
     if (!swRegPromise) {
-      swRegPromise = navigator.serviceWorker.register('./sw.js?v=7');
+      swRegPromise = navigator.serviceWorker.register('./sw.js?v=8');
     }
     const reg = await Promise.race([
       swRegPromise,
@@ -590,7 +750,8 @@ function makeTaskSnapshot(t) {
     help_note: t.help_note || '',
     is_private: Boolean(t.is_private),
     active: Boolean(t.active),
-    helper_ids: getHelperIds(t).join(',')
+    helper_ids: getHelperIds(t).join(','),
+    commentsCount: getComments(t).length
   };
 }
 
@@ -622,7 +783,7 @@ function detectTaskChangesAndNotify(newTasks) {
     if (!prev) {
       anyChanged = true;
       const key = `task-new-${t.id}`;
-      if (!sentNotificationKeys.has(key)) {
+      if (!sentNotificationKeys.has(key) && shouldNotifyMeForTask(t, false)) {
         sentNotificationKeys.add(key);
         const creator = t.created_by ? userName(t.created_by) : 'Alguien';
         sendLocalNotification('📌 Nueva tarea creada', {
@@ -639,6 +800,7 @@ function detectTaskChangesAndNotify(newTasks) {
       prev.assignee_id !== curr.assignee_id ||
       prev.needs_help !== curr.needs_help ||
       prev.helper_ids !== curr.helper_ids ||
+      prev.commentsCount !== curr.commentsCount ||
       prev.title !== curr.title
     ) {
       anyChanged = true;
@@ -647,7 +809,7 @@ function detectTaskChangesAndNotify(newTasks) {
     // Caso 2: Tarea finalizada (usar tag 'done-${id}-terminada' idéntico a la Edge Function en Supabase)
     if (curr.status === 'terminada' && prev.status !== 'terminada') {
       const key = `done-${t.id}-terminada`;
-      if (!sentNotificationKeys.has(key)) {
+      if (!sentNotificationKeys.has(key) && shouldNotifyMeForTask(t, false)) {
         sentNotificationKeys.add(key);
         const finisher = t.completed_by ? userName(t.completed_by) : (t.assignee_id ? userName(t.assignee_id) : 'Un compañero');
         sendLocalNotification('✅ Tarea finalizada', {
@@ -661,7 +823,7 @@ function detectTaskChangesAndNotify(newTasks) {
     // Caso 3: Alguien tomó o fue asignado a la tarea
     if (curr.assignee_id && prev.assignee_id !== curr.assignee_id) {
       const key = `taken-${t.id}`;
-      if (!sentNotificationKeys.has(key)) {
+      if (!sentNotificationKeys.has(key) && shouldNotifyMeForTask(t, false)) {
         sentNotificationKeys.add(key);
         const taker = userName(curr.assignee_id);
         sendLocalNotification('👤 Tarea tomada / asignada', {
@@ -674,7 +836,7 @@ function detectTaskChangesAndNotify(newTasks) {
     // Caso 4: Tarea puesta en progreso
     if (curr.status === 'en_progreso' && prev.status !== 'en_progreso') {
       const key = `prog-${t.id}`;
-      if (!sentNotificationKeys.has(key)) {
+      if (!sentNotificationKeys.has(key) && shouldNotifyMeForTask(t, false)) {
         sentNotificationKeys.add(key);
         const who = curr.assignee_id ? userName(curr.assignee_id) : 'Un compañero';
         sendLocalNotification('▶️ Tarea en progreso', {
@@ -684,10 +846,10 @@ function detectTaskChangesAndNotify(newTasks) {
       }
     }
 
-    // Caso 5: Piden ayuda (SOS) (usar tag 'help-${id}' idéntico a la Edge Function en Supabase)
+    // Caso 5: Piden ayuda (SOS) (siempre notifica incluso en modo 'mine')
     if (curr.needs_help && !prev.needs_help) {
       const key = `help-${t.id}`;
-      if (!sentNotificationKeys.has(key)) {
+      if (!sentNotificationKeys.has(key) && shouldNotifyMeForTask(t, true)) {
         sentNotificationKeys.add(key);
         const asker = curr.assignee_id ? userName(curr.assignee_id) : 'Un compañero';
         sendLocalNotification('🆘 Piden ayuda con una tarea', {
@@ -703,11 +865,27 @@ function detectTaskChangesAndNotify(newTasks) {
       const newIds = curr.helper_ids.split(',').map(Number).filter((id) => id && !prevSet.has(id));
       if (newIds.length) {
         const key = `helper-${t.id}`;
-        if (!sentNotificationKeys.has(key)) {
+        if (!sentNotificationKeys.has(key) && shouldNotifyMeForTask(t, false)) {
           sentNotificationKeys.add(key);
           const names = newIds.map(userName).join(', ');
           sendLocalNotification('🤝 Nuevo apoyo en tarea', {
             body: `${names} se sumó como ayudante en: "${t.title}"`,
+            tag: key
+          });
+        }
+      }
+    }
+
+    // Caso 7: Nuevo comentario en tarea
+    if (curr.commentsCount > prev.commentsCount) {
+      const comments = getComments(t);
+      const lastComment = comments[comments.length - 1];
+      const key = `comment-${t.id}-${curr.commentsCount}`;
+      if (lastComment && (!state.me || Number(lastComment.user_id) !== Number(state.me.id))) {
+        if (!sentNotificationKeys.has(key) && shouldNotifyMeForTask(t, false)) {
+          sentNotificationKeys.add(key);
+          sendLocalNotification(`💬 Comentario en "${t.title}"`, {
+            body: `${lastComment.user_name || 'Compañero'}: ${lastComment.text}`,
             tag: key
           });
         }
@@ -851,14 +1029,160 @@ function objectiveStats(o) {
 }
 
 /* ==========================================================================
-   Operaciones en Supabase
+   Operaciones en Supabase + Cola de Sincronización Offline
    ========================================================================== */
 function assertSupabase() {
   if (!sb) throw new Error('Por favor configura la URL y la Anon Key de Supabase en public/config.js');
 }
 
+function saveOfflineQueue() {
+  try { localStorage.setItem('obj_offline_queue', JSON.stringify(state.offlineQueue)); } catch (e) {}
+}
+
+function enqueueOfflineOp(op) {
+  state.offlineQueue.push({ ...op, queuedAt: nowIso() });
+  saveOfflineQueue();
+  render();
+}
+
+// Separa columnas nuevas (zone, subtasks, comments, photos) por si la tabla en Supabase aún no tiene el ALTER TABLE
+const EXTRA_TASK_COLS = ['zone', 'subtasks', 'comments', 'photos'];
+function splitExtraTaskCols(payload) {
+  const core = { ...payload };
+  const extras = {};
+  for (const k of EXTRA_TASK_COLS) {
+    if (k in core) {
+      extras[k] = core[k];
+      delete core[k];
+    }
+  }
+  return { core, extras };
+}
+
+async function safeTaskUpdate(id, patch, allowQueue = true) {
+  const numId = Number(id);
+  const { core, extras } = splitExtraTaskCols(patch);
+  if (Object.keys(extras).length) saveLocalTaskExtra(numId, extras);
+
+  // Actualizar estado optimista en memoria
+  state.tasks = state.tasks.map((t) => (t.id === numId ? { ...t, ...patch } : t));
+
+  if (!navigator.onLine && allowQueue) {
+    enqueueOfflineOp({ type: 'update_task', id: numId, patch });
+    return { offline: true };
+  }
+
+  try {
+    const { error } = await sb.from('tasks').update(patch).eq('id', numId);
+    if (error) {
+      // Si el error es por columna nueva aún no creada en SQL, guardar con columnas base
+      if (/column|schema cache/i.test(error.message) && Object.keys(core).length) {
+        const { error: err2 } = await sb.from('tasks').update(core).eq('id', numId);
+        if (err2) throw new Error(err2.message);
+        return { ok: true };
+      }
+      throw new Error(error.message);
+    }
+    return { ok: true };
+  } catch (err) {
+    if (allowQueue && (!navigator.onLine || /fetch|network|Failed to fetch/i.test(err.message))) {
+      enqueueOfflineOp({ type: 'update_task', id: numId, patch });
+      return { offline: true };
+    }
+    throw err;
+  }
+}
+
+async function safeTaskInsert(data, allowQueue = true) {
+  const { core, extras } = splitExtraTaskCols(data);
+
+  if (!navigator.onLine && allowQueue) {
+    const tempId = Date.now();
+    const optimistic = { id: tempId, active: true, ...data };
+    state.tasks.unshift(optimistic);
+    if (Object.keys(extras).length) saveLocalTaskExtra(tempId, extras);
+    enqueueOfflineOp({ type: 'insert_task', data });
+    return { data: optimistic, offline: true };
+  }
+
+  try {
+    const { data: created, error } = await sb.from('tasks').insert([data]).select().single();
+    if (error) {
+      if (/column|schema cache/i.test(error.message)) {
+        const { data: created2, error: err2 } = await sb.from('tasks').insert([core]).select().single();
+        if (err2) throw new Error(err2.message);
+        if (created2 && Object.keys(extras).length) saveLocalTaskExtra(created2.id, extras);
+        return { data: created2 };
+      }
+      throw new Error(error.message);
+    }
+    if (created && Object.keys(extras).length) saveLocalTaskExtra(created.id, extras);
+    return { data: created };
+  } catch (err) {
+    if (allowQueue && (!navigator.onLine || /fetch|network|Failed to fetch/i.test(err.message))) {
+      const tempId = Date.now();
+      const optimistic = { id: tempId, active: true, ...data };
+      state.tasks.unshift(optimistic);
+      enqueueOfflineOp({ type: 'insert_task', data });
+      return { data: optimistic, offline: true };
+    }
+    throw err;
+  }
+}
+
+async function safeUserPinUpdate(uid, pinValue) {
+  saveUserPinLocal(uid, pinValue);
+  state.users = state.users.map((u) => (u.id === Number(uid) ? { ...u, pin_code: pinValue || null } : u));
+  if (state.me && state.me.id === Number(uid)) {
+    state.me.pin_code = pinValue || null;
+    localStorage.setItem('obj_user', JSON.stringify(state.me));
+  }
+  try {
+    const { error } = await sb.from('users').update({ pin_code: pinValue || null }).eq('id', Number(uid));
+    if (error && !/column|schema cache/i.test(error.message)) {
+      throw new Error(error.message);
+    }
+  } catch (err) {
+    if (!/column|schema cache/i.test(err.message)) console.warn('PIN guardado localmente:', err);
+  }
+}
+
+let isFlushingQueue = false;
+async function flushOfflineQueue() {
+  if (isFlushingQueue || !navigator.onLine || !sb || !state.offlineQueue.length) return;
+  isFlushingQueue = true;
+  const pending = [...state.offlineQueue];
+  const remaining = [];
+  let syncedCount = 0;
+
+  for (const op of pending) {
+    try {
+      if (op.type === 'update_task') {
+        await safeTaskUpdate(op.id, op.patch, false);
+        syncedCount++;
+      } else if (op.type === 'insert_task') {
+        await safeTaskInsert(op.data, false);
+        syncedCount++;
+      }
+    } catch (e) {
+      remaining.push(op);
+    }
+  }
+
+  state.offlineQueue = remaining;
+  saveOfflineQueue();
+  isFlushingQueue = false;
+
+  if (syncedCount > 0) {
+    toast(`✅ Conexión recuperada: ${syncedCount} cambio(s) sincronizado(s)`, 'ok');
+    await refresh();
+  } else {
+    render();
+  }
+}
+
 async function logActivity(action, entity, entity_id, summary, details = null) {
-  if (!sb) return;
+  if (!sb || !navigator.onLine) return;
   try {
     await sb.from('activity').insert([{
       user_id: state.me ? state.me.id : null,
@@ -872,7 +1196,7 @@ async function logActivity(action, entity, entity_id, summary, details = null) {
 }
 
 async function generateRoutineTasks() {
-  if (!sb || !state.routines.length) return;
+  if (!sb || !navigator.onLine || !state.routines.length) return;
   const today = todayStr();
   const d = new Date();
   const wd = String(d.getDay() === 0 ? 7 : d.getDay()); // 1=L, 7=D
@@ -885,7 +1209,7 @@ async function generateRoutineTasks() {
     // Verificar si ya existe para hoy
     const exists = state.tasks.some((t) => t.routine_id === r.id && t.routine_date === today);
     if (!exists) {
-      const { data, error } = await sb.from('tasks').insert([{
+      const payload = {
         title: r.title,
         description: r.description,
         objective_id: r.objective_id,
@@ -894,11 +1218,13 @@ async function generateRoutineTasks() {
         assignee_id: r.assignee_id,
         estimated_minutes: r.estimated_minutes,
         priority: r.priority,
-        due_at: `${today}T${r.due_time}`,
+        zone: r.zone || '',
+        due_at: `${today}T${r.due_time}:00-05:00`,
         created_by: r.created_by,
         created_at: nowIso(),
         updated_at: nowIso()
-      }]).select().single();
+      };
+      const { data } = await safeTaskInsert(payload, false).catch(() => ({ data: null }));
 
       if (data) {
         knownTasksSnapshot.set(data.id, makeTaskSnapshot(data));
@@ -911,20 +1237,58 @@ async function generateRoutineTasks() {
 
 async function refresh() {
   if (!sb) return;
-  const [uRes, oRes, tRes, rRes] = await Promise.all([
-    sb.from('users').select('*').order('name', { ascending: true }),
-    sb.from('objectives').select('*').order('end_date', { ascending: true }),
-    sb.from('tasks').select('*').order('due_at', { ascending: true, nullsFirst: false }),
-    sb.from('routines').select('*').order('due_time', { ascending: true })
-  ]);
+  if (!navigator.onLine) {
+    try {
+      const cached = JSON.parse(localStorage.getItem('obj_offline_data') || 'null');
+      if (cached) {
+        state.users = cached.users || state.users;
+        state.objectives = cached.objectives || state.objectives;
+        state.tasks = cached.tasks || state.tasks;
+        state.routines = cached.routines || state.routines;
+      }
+    } catch (e) {}
+    render();
+    return;
+  }
 
-  if (uRes.error) throw new Error(uRes.error.message);
-  state.users = uRes.data || [];
-  state.objectives = oRes.data || [];
-  const fetchedTasks = tRes.data || [];
-  detectTaskChangesAndNotify(fetchedTasks);
-  state.tasks = fetchedTasks;
-  state.routines = rRes.data || [];
+  try {
+    const [uRes, oRes, tRes, rRes] = await Promise.all([
+      sb.from('users').select('*').order('name', { ascending: true }),
+      sb.from('objectives').select('*').order('end_date', { ascending: true }),
+      sb.from('tasks').select('*').order('due_at', { ascending: true, nullsFirst: false }),
+      sb.from('routines').select('*').order('due_time', { ascending: true })
+    ]);
+
+    if (uRes.error) throw new Error(uRes.error.message);
+    state.users = uRes.data || [];
+    state.objectives = oRes.data || [];
+    const fetchedTasks = tRes.data || [];
+    detectTaskChangesAndNotify(fetchedTasks);
+    state.tasks = fetchedTasks;
+    state.routines = rRes.data || [];
+
+    // Guardar copia local para Modo Offline
+    try {
+      localStorage.setItem('obj_offline_data', JSON.stringify({
+        users: state.users,
+        objectives: state.objectives,
+        tasks: state.tasks,
+        routines: state.routines
+      }));
+    } catch (e) {}
+  } catch (netErr) {
+    try {
+      const cached = JSON.parse(localStorage.getItem('obj_offline_data') || 'null');
+      if (cached) {
+        state.users = cached.users || state.users;
+        state.objectives = cached.objectives || state.objectives;
+        state.tasks = cached.tasks || state.tasks;
+        state.routines = cached.routines || state.routines;
+      }
+    } catch (e) {}
+    render();
+    return;
+  }
 
   // Actualizar usuario en sesión
   if (state.me) {
@@ -945,12 +1309,17 @@ async function refresh() {
   if (state.view === 'actividad') await loadActivity(false);
   render();
   checkDueTasksForNotification();
+  maybeShowMorningShiftSummary();
 }
 
 // Sincronización silenciosa en segundo plano para detectar cambios de otros compañeros aunque Realtime falle
 async function silentRefresh() {
-  if (!sb || !state.me) return;
+  if (!sb || !state.me || !navigator.onLine) return;
   try {
+    if (state.offlineQueue.length) {
+      await flushOfflineQueue();
+      return;
+    }
     const [uRes, tRes] = await Promise.all([
       sb.from('users').select('*').order('name', { ascending: true }),
       sb.from('tasks').select('*').order('due_at', { ascending: true, nullsFirst: false })
@@ -968,7 +1337,7 @@ async function silentRefresh() {
 }
 
 async function loadActivity(rerender = true) {
-  if (!sb) return;
+  if (!sb || !navigator.onLine) return;
   let q = sb.from('activity').select('*').order('id', { ascending: false }).limit(200);
   if (state.filters.activityUser) q = q.eq('user_id', Number(state.filters.activityUser));
   const { data, error } = await q;
@@ -985,8 +1354,9 @@ async function run(fn, okMsg) {
   try {
     assertSupabase();
     await fn();
-    if (okMsg) toast(okMsg, 'ok');
-    await refresh();
+    if (okMsg) toast(okMsg + (!navigator.onLine ? ' (Guardado en cola offline 📡)' : ''), 'ok');
+    if (navigator.onLine) await refresh();
+    else render();
     return true;
   } catch (err) {
     toast(err.message, 'error');
@@ -1055,21 +1425,39 @@ function render() {
     return `<button class="${state.view === n.id ? 'active' : ''}" data-action="nav" data-view="${n.id}">${n.icon}<span>${n.label}</span>${b ? `<i class="badge">${b}</i>` : ''}</button>`;
   }).join('');
   const showFab = ['hoy', 'tablero', 'objetivos'].includes(state.view);
+  const isDark = state.theme === 'dark';
+
+  const offlineBannerHtml = !navigator.onLine
+    ? `<div class="offline-bar">
+         <span>📡 Modo sin conexión · Puedes seguir trabajando (${state.offlineQueue.length} cambio(s) en cola)</span>
+       </div>`
+    : state.offlineQueue.length > 0
+      ? `<div class="sync-bar">
+           <span>🔄 Sincronizando ${state.offlineQueue.length} cambio(s) guardado(s) sin conexión…</span>
+           <button type="button" class="btn btn-sm btn-success" data-action="sync-offline-now">Sincronizar</button>
+         </div>`
+      : '';
 
   app.innerHTML = `
   <div class="shell">
     <aside class="sidebar">
       <div class="brand-row"><div class="brand"><img src="icon.svg" alt=""></div><div><b>${esc(TEAM_NAME)}</b><span>${esc(STORE_NAME)} · Objetivos</span></div></div>
       <nav>${navBtns()}</nav>
-      <div class="me"><span class="avatar">${esc(initials(state.me.name))}</span><div><b>${esc(state.me.name)}</b><span>${ROLE[state.me.role]}</span></div>
-        <button class="icon-btn" title="Cerrar sesión" data-action="logout">${ICON.logout}</button></div>
+      <div class="me">
+        <span class="avatar">${esc(initials(state.me.name))}</span>
+        <div><b>${esc(state.me.name)}</b><span>${ROLE[state.me.role]}</span></div>
+        <button class="icon-btn" title="${isDark ? 'Modo claro' : 'Modo oscuro'}" data-action="toggle-theme">${isDark ? ICON.sun : ICON.moon}</button>
+        <button class="icon-btn" title="Cerrar sesión" data-action="logout">${ICON.logout}</button>
+      </div>
     </aside>
     <main class="main">
       <header class="topbar">
         <div class="brand"><img src="icon.svg" alt=""></div>
         <div class="t"><b>${esc(TEAM_NAME)}</b><span>${esc(STORE_NAME)} · ${ROLE[state.me.role]}</span></div>
+        <button class="icon-btn" style="color:#fff" title="${isDark ? 'Modo claro' : 'Modo oscuro'}" data-action="toggle-theme">${isDark ? ICON.sun : ICON.moon}</button>
         <span class="avatar" data-action="nav" data-view="mas">${esc(initials(state.me.name))}</span>
       </header>
+      ${offlineBannerHtml}
       <div class="content">${renderView()}</div>
     </main>
     <nav class="bottomnav">${navBtns()}</nav>
@@ -1088,7 +1476,10 @@ function renderView() {
 }
 
 function renderLogin() {
-  const chips = activeUsers().map((u) => `<button class="chip" data-action="login-pick" data-name="${esc(u.name)}">${esc(u.name)}</button>`).join('');
+  const chips = activeUsers().map((u) => {
+    const hasPin = Boolean(getUserPin(u));
+    return `<button class="chip" data-action="login-pick" data-name="${esc(u.name)}">${hasPin ? '🔒 ' : ''}${esc(u.name)}</button>`;
+  }).join('');
   return `
   <div class="login"><div class="login-card">
     <div class="brand-mark"><img src="icon.svg" alt=""></div>
@@ -1100,7 +1491,7 @@ function renderLogin() {
       <button class="btn btn-primary btn-lg" type="submit">Entrar</button>
     </form>
     ${chips ? `<div class="quick-users"><p class="muted small">¿Ya entraste antes? Toca tu nombre:</p><div class="chips">${chips}</div></div>` : ''}
-    <p class="login-note small muted">Sin contraseñas: tu nombre registra qué tareas tomas y qué modificas. Si eres la primera persona en entrar, serás Administrador.</p>
+    <p class="login-note small muted">Puedes proteger tu perfil con un PIN de 4 dígitos desde el menú <b>Más → PIN de seguridad</b>.</p>
   </div></div>`;
 }
 
@@ -1111,6 +1502,10 @@ function taskCard(t) {
   const me = state.me ? state.me.id : null;
   const isMyTask = t.assignee_id === me;
   const amHelper = helpers.includes(me);
+  const zone = getTaskZone(t);
+  const subtasks = getSubtasks(t);
+  const comments = getComments(t);
+  const photos = getPhotos(t);
 
   const actions = [];
   if (t.active && isOpen(t)) {
@@ -1138,8 +1533,14 @@ function taskCard(t) {
             ? `<button class="btn btn-ghost btn-sm" data-action="help-off" data-id="${t.id}">Ya no necesito ayuda</button>`
             : `<button class="btn btn-warn btn-sm" data-action="help-on" data-id="${t.id}">🆘 Pedir ayuda</button>`);
         }
+        actions.push(`<button class="btn btn-ghost btn-sm" data-action="quick-photo" data-id="${t.id}" title="Adjuntar foto de evidencia">${ICON.camera} Foto${photos.length ? ` (${photos.length})` : ''}</button>`);
       }
     }
+  }
+
+  // Botón rápido de hilo de comentarios / notas de turno
+  if (t.active) {
+    actions.push(`<button class="btn btn-ghost btn-sm" data-action="open-comments" data-id="${t.id}" title="Comentarios y notas de turno">${ICON.chat} ${comments.length ? `${comments.length}` : 'Comentar'}</button>`);
   }
 
   // Si soy el creador y tengo rol con tareas privadas, puedo cambiar entre pública y privada
@@ -1161,7 +1562,6 @@ function taskCard(t) {
     }
   }
 
-
   // Renderizar ayudantes
   const helpersHtml = helpers.length ? `
     <span class="helpers-badges">
@@ -1173,10 +1573,53 @@ function taskCard(t) {
       }).join('')}
     </span>` : '';
 
+  // Renderizar Checklist de Subtareas interactivo en la tarjeta
+  let subtasksHtml = '';
+  if (subtasks.length > 0) {
+    const doneSub = subtasks.filter((s) => s.done).length;
+    const pctSub = Math.round((doneSub / subtasks.length) * 100);
+    subtasksHtml = `
+      <div class="subtasks-card-preview" data-action="noop">
+        <div class="subtasks-progress-head">
+          <span>☑️ Pasos (${doneSub}/${subtasks.length})</span>
+          <span>${pctSub}%</span>
+        </div>
+        <div class="subtasks-bar"><i style="width:${pctSub}%"></i></div>
+        ${subtasks.map((st, idx) => `
+          <label class="subtask-row ${st.done ? 'done' : ''}" data-action="toggle-subtask" data-id="${t.id}" data-idx="${idx}">
+            <input type="checkbox" ${st.done ? 'checked' : ''} ${canEditTask(t) ? '' : 'disabled'} tabindex="-1">
+            <span>${esc(st.text)}</span>
+          </label>
+        `).join('')}
+      </div>`;
+  }
+
+  // Renderizar miniaturas de fotos de evidencia
+  let photosHtml = '';
+  if (photos.length > 0) {
+    photosHtml = `
+      <div class="task-photos-strip">
+        ${photos.map((p, idx) => `
+          <div class="photo-thumb" data-action="view-photo" data-id="${t.id}" data-idx="${idx}" title="Ver evidencia fotográfica">
+            <img src="${esc(p.url)}" alt="Evidencia">
+            <span class="photo-tag">${esc(p.label || 'Evidencia')}</span>
+          </div>
+        `).join('')}
+      </div>`;
+  }
+
+  // Último comentario visible como vista previa
+  const lastComment = comments.length ? comments[comments.length - 1] : null;
+  const lastCommentHtml = lastComment ? `
+    <div class="small muted" style="margin-top:6px;padding:5px 8px;background:var(--bg);border-radius:8px;border-left:3px solid var(--blue)">
+      💬 <b>${esc(lastComment.user_name)}:</b> ${esc(lastComment.text)}
+    </div>` : '';
+
   return `
   <article class="task u-${u.level} ${t.needs_help && isOpen(t) ? 'needs-help' : ''} ${t.is_private ? 'is-private' : ''} ${t.active ? '' : 'is-hidden'}" data-action="open-task" data-id="${t.id}">
     <div class="task-top">
       <span class="pill st-${t.status}">${STATUS[t.status]}</span>
+      ${zone ? `<span class="pill pill-zone">${esc(ZONE_MAP[zone] || zone)}</span>` : ''}
       ${t.is_private ? `<span class="pill pill-private" title="Solo tú puedes ver esta tarea">${ICON.lock} Privada</span>` : ''}
       ${t.priority !== 'media' ? `<span class="pill prio-${t.priority}">Prioridad ${PRIORITY[t.priority].toLowerCase()}</span>` : ''}
       ${t.routine_id ? `<span class="pill">${ICON.repeat} Diaria</span>` : ''}
@@ -1191,6 +1634,9 @@ function taskCard(t) {
       ${obj ? `<span>${ICON.target} ${esc(obj.title)}</span>` : ''}
     </div>
     <div class="urg-label">${esc(u.label)}</div>
+    ${subtasksHtml}
+    ${photosHtml}
+    ${lastCommentHtml}
     ${t.needs_help && isOpen(t) ? `<div class="help-box">🆘 Necesita ayuda${t.help_note ? ': ' + esc(t.help_note) : ''}</div>` : ''}
     ${actions.length ? `<div class="task-actions">${actions.join('')}</div>` : ''}
   </article>`;
@@ -1208,9 +1654,45 @@ const legend = () => `<div class="legend">
   <span><i style="background:var(--u-ok)"></i>A tiempo</span>
   <span><i style="background:var(--u-done)"></i>Terminada</span></div>`;
 
+function renderZoneFilterChips() {
+  const cur = state.filters.zone || '';
+  return `
+    <div class="zone-filter-scroll">
+      <button type="button" class="zone-chip ${cur === '' ? 'active' : ''}" data-action="filter-zone" data-zone="">Todas las zonas</button>
+      ${ZONES.map((z) => `<button type="button" class="zone-chip ${cur === z.id ? 'active' : ''}" data-action="filter-zone" data-zone="${esc(z.id)}">${esc(z.label)}</button>`).join('')}
+    </div>`;
+}
+
+function renderCompanerismoCard() {
+  const stats = getCompanerismoStats().slice(0, 4);
+  if (!stats.length) return '';
+  const medals = ['🥇', '🥈', '🥉', '🏅'];
+  return `
+    <div class="companerismo-card">
+      <div class="companerismo-head">
+        <div>
+          <h2 style="font-size:15.5px;display:flex;align-items:center;gap:6px">🏆 Reconocimiento al Compañerismo (Top Apoyos)</h2>
+          <p class="small muted" style="margin:2px 0 0">Colaboradores que más se han sumado como ayudantes para apoyar al equipo.</p>
+        </div>
+      </div>
+      <div class="companerismo-grid">
+        ${stats.map((s, idx) => `
+          <div class="leader-item">
+            <span class="medal-icon">${medals[idx] || '🤝'}</span>
+            <div class="leader-info">
+              <b>${esc(s.user.name)}</b>
+              <span>🤝 ${s.totalHelped} apoyo${s.totalHelped === 1 ? '' : 's'} · ✓ ${s.doneHelped} terminada${s.doneHelped === 1 ? '' : 's'}</span>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>`;
+}
+
 function viewToday() {
   const me = state.me.id;
-  const all = activeTasks();
+  const zoneFilter = state.filters.zone || '';
+  const all = activeTasks().filter((t) => !zoneFilter || getTaskZone(t) === zoneFilter);
   const mine = sortTasks(all.filter((t) => !t.is_private && isAssignedOrHelper(t, me) && isOpen(t)));
   const free = sortTasks(all.filter((t) => !t.is_private && !t.assignee_id && isOpen(t)));
   const doneAll = sortTasks(all.filter((t) => isAssignedOrHelper(t, me) && doneToday(t)));
@@ -1275,8 +1757,12 @@ function viewToday() {
     </div>` : '';
 
   return `
-  <div class="page-head"><div><h1>${hello}, ${esc(state.me.name.split(' ')[0])}</h1><p class="muted" style="margin:4px 0 0;text-transform:capitalize">${dateLabel}</p></div></div>
+  <div class="page-head">
+    <div><h1>${hello}, ${esc(state.me.name.split(' ')[0])}</h1><p class="muted" style="margin:4px 0 0;text-transform:capitalize">${dateLabel}</p></div>
+    <button class="btn btn-sm" data-action="open-shift-summary" title="Ver resumen de inicio de turno">${ICON.clipboard} Resumen de turno</button>
+  </div>
   ${notifBannerHtml}
+  ${renderZoneFilterChips()}
   <div class="stats">
     <div class="stat"><b>${mine.length}</b><span>Mis tareas / apoyo</span></div>
     ${hasPrivateTasks() ? `<div class="stat private-stat"><b>${privates.length}</b><span>Tareas privadas</span></div>` : ''}
@@ -1316,6 +1802,7 @@ function viewBoard() {
   if (f.person === 'none') list = list.filter((t) => !t.assignee_id && !getHelperIds(t).length);
   else if (f.person) list = list.filter((t) => isAssignedOrHelper(t, Number(f.person)));
   if (f.objective) list = list.filter((t) => String(t.objective_id) === f.objective);
+  if (f.zone) list = list.filter((t) => getTaskZone(t) === f.zone);
 
   const helps = sortTasks(all.filter((t) => t.needs_help && isOpen(t)));
 
@@ -1354,7 +1841,6 @@ function viewBoard() {
 
   let visibleDoneItems = allDoneItems;
   if (state.boardDoneFilter === 'recientes') {
-    // Muestra las de hoy o al menos las últimas 5 terminadas
     visibleDoneItems = allDoneItems.filter((t, idx) => doneToday(t) || idx < 5);
   } else if (state.boardDoneFilter === 'semana') {
     visibleDoneItems = allDoneItems.filter((t) => (parseLocal(t.completed_at) || 0) >= weekAgo);
@@ -1408,6 +1894,7 @@ function viewBoard() {
   return `
   <div class="page-head"><div><h1>Tablero del equipo</h1><p class="muted" style="margin:4px 0 0">Control en tiempo real de avance, cargas y ayudas.</p></div></div>
   ${helps.length ? `<div class="section help-list" style="margin-top:0"><div class="section-head"><h2>🆘 Piden ayuda <span class="count">${helps.length}</span></h2></div>${taskList(helps, '')}</div>` : ''}
+  ${renderCompanerismoCard()}
   <div class="section"><div class="section-head"><h2>${ICON.users} Carga del equipo</h2>
     ${f.person ? '<button class="btn btn-sm btn-ghost" data-action="filter-person" data-id="">Ver todos</button>' : ''}</div>
     <div class="team-scroll">${personCards || '<div class="empty">Aún no hay colaboradores.</div>'}
@@ -1419,11 +1906,13 @@ function viewBoard() {
     </div>
   </div>
   <div class="section">
-    <div class="filters">
+    <div class="filters" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">
       <select data-filter="person"><option value="">Todas las personas</option><option value="none" ${f.person === 'none' ? 'selected' : ''}>Sin asignar</option>
         ${activeUsers().map((u) => `<option value="${u.id}" ${f.person === String(u.id) ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>
       <select data-filter="objective"><option value="">Todos los objetivos</option>
         ${activeObjectives().map((o) => `<option value="${o.id}" ${f.objective === String(o.id) ? 'selected' : ''}>${esc(o.title)}</option>`).join('')}</select>
+      <select data-filter="zone"><option value="">Todas las zonas / deportes</option>
+        ${ZONES.map((z) => `<option value="${esc(z.id)}" ${f.zone === z.id ? 'selected' : ''}>${esc(z.label)}</option>`).join('')}</select>
     </div>
     <div class="seg-tabs board-tabs">${tabs}</div>
     <div class="board" data-mobile="${f.status}">${cols}</div>
@@ -1466,7 +1955,12 @@ function viewObjectives() {
     <div class="card routine" ${isLead() ? `data-action="edit-routine" data-id="${r.id}" style="cursor:pointer"` : ''}>
       <span class="avatar sm" style="background:var(--blue-50);color:var(--blue)">${ICON.repeat}</span>
       <div class="r-body"><b>${esc(r.title)}</b>
-        <div class="meta"><span>${ICON.clock} hasta ${esc(r.due_time)}</span><span>${ICON.user} ${r.assignee_id ? esc(userName(r.assignee_id)) : 'Libre'}</span><span>${ICON.timer} ${fmtMinutes(r.estimated_minutes)}</span></div>
+        <div class="meta">
+          ${r.zone ? `<span class="pill pill-zone" style="font-size:11px;padding:1px 6px">${esc(ZONE_MAP[r.zone] || r.zone)}</span>` : ''}
+          <span>${ICON.clock} hasta ${esc(r.due_time)}</span>
+          <span>${ICON.user} ${r.assignee_id ? esc(userName(r.assignee_id)) : 'Libre'}</span>
+          <span>${ICON.timer} ${fmtMinutes(r.estimated_minutes)}</span>
+        </div>
       </div>
       <span class="days">${WEEKDAYS.map(([v, l]) => `<i class="${r.weekdays.split(',').includes(v) ? 'on' : ''}">${l}</i>`).join('')}</span>
     </div>`).join('');
@@ -1511,15 +2005,27 @@ function viewMore() {
       ? `${ICON.bell} Notificaciones del equipo <span class="pill st-terminada" style="margin-left:auto;font-size:11px">Activas ✓</span>`
       : `${ICON.bell} Permitir notificaciones del sistema <span class="pill st-en_progreso" style="margin-left:auto;font-size:11px">Activar permiso</span>`;
 
+  const notifModeLabel = state.notifMode === 'mine'
+    ? '🎯 Solo mis tareas / SOS'
+    : '🔔 Todas las del equipo';
+
+  const hasPin = Boolean(getUserPin(state.me));
+  const isDark = state.theme === 'dark';
+
   return `
   <div class="page-head"><h1>Más</h1></div>
   <div class="card row" style="gap:14px"><span class="avatar lg">${esc(initials(state.me.name))}</span>
-    <div><b style="font-size:17px">${esc(state.me.name)}</b><div><span class="pill role-${state.me.role}">${ROLE[state.me.role]}</span></div></div></div>
+    <div style="flex:1"><b style="font-size:17px">${esc(state.me.name)}</b><div><span class="pill role-${state.me.role}">${ROLE[state.me.role]}</span> ${hasPin ? '<span class="pill st-terminada">🔒 PIN activo</span>' : ''}</div></div>
+    <button class="btn btn-sm btn-ghost" data-action="open-shift-summary">${ICON.clipboard} Resumen</button>
+  </div>
   <div class="card menu-list" style="padding:0;margin-top:14px">
     <button data-action="toggle-notifications">${notifLabel}</button>
+    <button data-action="toggle-notif-mode">${ICON.target} Filtro de alertas <span class="pill st-en_progreso" style="margin-left:auto;font-size:11px">${notifModeLabel}</span></button>
     <button data-action="test-notification" style="color:var(--blue);font-weight:600">${ICON.bell} Probar notificación ahora</button>
+    <button data-action="toggle-theme">${isDark ? ICON.sun : ICON.moon} Apariencia <span class="pill" style="margin-left:auto;font-size:11px">${isDark ? '☀️ Cambiar a Claro' : '🌙 Cambiar a Oscuro'}</span></button>
+    <button data-action="open-pin-sheet">${ICON.key} PIN de seguridad (4 dígitos) <span class="pill ${hasPin ? 'st-terminada' : ''}" style="margin-left:auto;font-size:11px">${hasPin ? 'Configurado ✓' : 'Opcional'}</span></button>
     <button data-action="more" data-sub="instalar" style="color:var(--blue);font-weight:600">${ICON.phone} Instalar como App en celular</button>
-    <button data-action="more" data-sub="equipo">${ICON.users} Equipo y roles</button>
+    <button data-action="more" data-sub="equipo">${ICON.users} Equipo, roles y compañerismo</button>
     <button data-action="more" data-sub="papelera">${ICON.eyeOff} Elementos ocultos</button>
     <button data-action="more" data-sub="guia">${ICON.book} Metodología de trabajo</button>
     <button data-action="logout" style="color:var(--u-overdue)">${ICON.logout} Cerrar sesión</button>
@@ -1572,11 +2078,13 @@ function viewUsers() {
   const list = isLead() ? state.users : activeUsers();
   const rows = list.map((u) => {
     const self = u.id === state.me.id;
+    const uHasPin = Boolean(getUserPin(u));
     let actions = '';
     if (isAdmin()) {
       actions = `
         <select data-change="user-role" data-id="${u.id}" style="width:auto;min-height:36px;padding:6px 10px;font-size:14px">
           ${Object.keys(ROLE).map((r) => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${ROLE[r]}</option>`).join('')}</select>
+        ${uHasPin ? `<button class="btn btn-sm btn-ghost" data-action="admin-reset-pin" data-id="${u.id}" title="Quitar PIN olvidado">🔓 Quitar PIN</button>` : ''}
         ${self ? '' : `<button class="btn btn-sm ${u.active ? 'btn-ghost' : 'btn-success'}" data-action="user-toggle" data-id="${u.id}">${u.active ? 'Desactivar' : 'Reactivar'}</button>
         <button class="btn btn-sm btn-danger" data-action="user-delete" data-id="${u.id}" title="Eliminar">${ICON.trash}</button>`}`;
     } else if (state.me.role === 'lider' && ['colaborador', 'colaborador_pro'].includes(u.role)) {
@@ -1588,11 +2096,12 @@ function viewUsers() {
         ${self ? '' : `<button class="btn btn-sm ${u.active ? 'btn-ghost' : 'btn-success'}" data-action="user-toggle" data-id="${u.id}">${u.active ? 'Desactivar' : 'Reactivar'}</button>`}`;
     }
     return `<div class="user-row ${u.active ? '' : 'off'}"><span class="avatar">${esc(initials(u.name))}</span>
-      <div class="u-body"><b>${esc(u.name)}${self ? ' (tú)' : ''}</b><div class="small muted">${isAdmin() ? '' : `<span class="pill role-${u.role}">${ROLE[u.role]}</span> `}${u.active ? `Último ingreso: ${u.last_login ? fmtDateTime(u.last_login) : '—'}` : 'Desactivado'}</div></div>
+      <div class="u-body"><b>${esc(u.name)}${self ? ' (tú)' : ''} ${uHasPin ? '<span title="PIN configurado">🔒</span>' : ''}</b><div class="small muted">${isAdmin() ? '' : `<span class="pill role-${u.role}">${ROLE[u.role]}</span> `}${u.active ? `Último ingreso: ${u.last_login ? fmtDateTime(u.last_login) : '—'}` : 'Desactivado'}</div></div>
       <div class="u-actions">${actions}</div></div>`;
   }).join('');
   return `
-  <div class="page-head"><div><h1>Equipo y roles</h1><p class="muted" style="margin:4px 0 0">${activeUsers().length} personas activas</p></div>${backBtn()}</div>
+  <div class="page-head"><div><h1>Equipo y compañerismo</h1><p class="muted" style="margin:4px 0 0">${activeUsers().length} personas activas</p></div>${backBtn()}</div>
+  ${renderCompanerismoCard()}
   <div class="card">${rows}</div>`;
 }
 
@@ -1632,6 +2141,40 @@ function viewGuide() {
 const radio = (name, value, label, checked, disabled = false) =>
   `<label><input type="radio" name="${name}" value="${value}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span>${label}</span></label>`;
 
+function renderDraftSubtasksList() {
+  const box = document.getElementById('draft-subtasks-list');
+  if (!box) return;
+  if (!state.draftSubtasks.length) {
+    box.innerHTML = '<p class="small muted" style="margin:6px 0 0">Sin subtareas. Añade pasos arriba si deseas dividir la tarea.</p>';
+    return;
+  }
+  box.innerHTML = state.draftSubtasks.map((st, idx) => `
+    <div class="subtask-edit-item">
+      <label class="row" style="flex:1;cursor:pointer">
+        <input type="checkbox" data-action="draft-subtask-toggle" data-idx="${idx}" ${st.done ? 'checked' : ''}>
+        <span style="${st.done ? 'text-decoration:line-through;color:var(--muted)' : ''}">${esc(st.text)}</span>
+      </label>
+      <button type="button" class="btn btn-sm btn-danger" style="min-height:26px;padding:2px 8px" data-action="draft-subtask-del" data-idx="${idx}">✕</button>
+    </div>
+  `).join('');
+}
+
+function renderDraftPhotosList() {
+  const box = document.getElementById('draft-photos-list');
+  if (!box) return;
+  if (!state.draftPhotos.length) {
+    box.innerHTML = '<span class="small muted">Sin fotos adjuntas todavía.</span>';
+    return;
+  }
+  box.innerHTML = state.draftPhotos.map((p, idx) => `
+    <div class="photo-thumb">
+      <img src="${esc(p.url)}" alt="Foto" data-action="preview-draft-photo" data-idx="${idx}">
+      <span class="photo-tag">${esc(p.label || 'Evidencia')}</span>
+      <button type="button" class="photo-del" data-action="draft-photo-del" data-idx="${idx}" title="Quitar foto">✕</button>
+    </div>
+  `).join('');
+}
+
 function openTaskSheet(t) {
   if (t.id && !canEditTask(t)) return openTaskDetail(t);
   const isNew = !t.id;
@@ -1643,6 +2186,9 @@ function openTaskSheet(t) {
 
   const helpers = getHelperIds(t);
   const allUsers = activeUsers();
+  const currentZone = getTaskZone(t);
+  state.draftSubtasks = getSubtasks(t).map((s) => ({ ...s }));
+  state.draftPhotos = getPhotos(t).map((p) => ({ ...p }));
 
   // Checkboxes para asignar ayudantes / colaboradores de apoyo
   const helpersCheckboxes = allUsers.map((u) => {
@@ -1658,6 +2204,16 @@ function openTaskSheet(t) {
   <form data-form="task" data-id="${t.id || ''}" class="stack">
     ${sheetHead(isNew ? 'Nueva tarea' : 'Editar tarea')}
     <label class="field"><span>Título *</span><input name="title" required maxlength="150" value="${esc(t.title || '')}" ${dis} placeholder="Ej: Reponer lineal de bicis"></label>
+    <div class="grid2">
+      <label class="field"><span>Zona / Pasillo / Deporte</span>
+        <select name="zone" ${dis}>
+          <option value="">— General —</option>
+          ${ZONES.map((z) => `<option value="${esc(z.id)}" ${currentZone === z.id ? 'selected' : ''}>${esc(z.label)}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field"><span>Objetivo</span><select name="objective_id" ${dis}><option value="">— Ninguno —</option>
+        ${objs.map((o) => `<option value="${o.id}" ${t.objective_id === o.id ? 'selected' : ''}>${esc(o.title)}</option>`).join('')}</select></label>
+    </div>
     <label class="field"><span>Descripción</span><textarea name="description" rows="2" maxlength="2000" ${dis} placeholder="Detalles o ubicación…">${esc(t.description || '')}</textarea></label>
     <div class="field"><span>Estado</span><div class="seg">${STATUS_ORDER.map((s) => radio('status', s, STATUS[s], (t.status || 'sin_iniciar') === s)).join('')}</div></div>
     
@@ -1666,6 +2222,36 @@ function openTaskSheet(t) {
         <option value="">— Sin asignar (libre) —</option>
         ${assignees.map((u) => `<option value="${u.id}" ${t.assignee_id === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select></label>
       <label class="field"><span>Fecha y hora límite (Hora Bogotá)</span><input type="datetime-local" name="due_at" value="${esc(toLocalInputDate(t.due_at))}" ${dis}></label>
+    </div>
+
+    <!-- Subtareas / Checklist -->
+    <div class="subtasks-editor">
+      <span style="font-size:13px;font-weight:600;color:var(--muted)">☑️ Checklist / Subtareas paso a paso:</span>
+      <div class="subtask-add-row">
+        <input type="text" id="new-subtask-input" placeholder="Ej: Traer cajas de bodega…" maxlength="120">
+        <button type="button" class="btn btn-sm btn-primary" data-action="draft-subtask-add">+ Paso</button>
+      </div>
+      <div id="draft-subtasks-list"></div>
+    </div>
+
+    <!-- Evidencia Fotográfica (Antes / Después) -->
+    <div class="photos-box">
+      <div class="row" style="justify-content:space-between;flex-wrap:wrap">
+        <span style="font-size:13px;font-weight:600;color:var(--muted)">📷 Evidencia fotográfica (Antes / Después):</span>
+        <div class="row" style="gap:6px">
+          <select id="draft-photo-label" style="width:auto;min-height:34px;padding:4px 8px;font-size:13px">
+            <option value="Antes">Antes</option>
+            <option value="Después" selected>Después</option>
+            <option value="Evidencia">Evidencia</option>
+            <option value="SOS / Bloqueo">SOS / Bloqueo</option>
+          </select>
+          <label class="btn btn-sm btn-primary" style="cursor:pointer;margin:0">
+            ${ICON.camera} Subir / Cámara
+            <input type="file" id="draft-photo-input" accept="image/*" capture="environment" style="display:none">
+          </label>
+        </div>
+      </div>
+      <div id="draft-photos-list" class="photos-grid"></div>
     </div>
 
     <!-- Ayudantes / Apoyos -->
@@ -1681,8 +2267,6 @@ function openTaskSheet(t) {
       <input type="number" name="estimated_minutes" min="0" step="5" inputmode="numeric" value="${t.estimated_minutes ?? 30}" ${dis}>
       <div class="chips" style="margin-top:8px">${[15, 30, 60, 120, 240].map((m) => `<button type="button" class="chip" data-action="set-minutes" data-min="${m}" ${dis}>${fmtMinutes(m)}</button>`).join('')}</div></div>
     <div class="field"><span>Prioridad</span><div class="seg">${Object.keys(PRIORITY).map((p) => radio('priority', p, PRIORITY[p], (t.priority || 'media') === p, !full)).join('')}</div></div>
-    <label class="field"><span>Objetivo</span><select name="objective_id" ${dis}><option value="">— Ninguno —</option>
-      ${objs.map((o) => `<option value="${o.id}" ${t.objective_id === o.id ? 'selected' : ''}>${esc(o.title)}</option>`).join('')}</select></label>
     <div class="help-field">
       <label class="check"><input type="checkbox" name="needs_help" ${t.needs_help ? 'checked' : ''}> 🆘 Necesito ayuda con esta tarea</label>
       <input name="help_note" maxlength="500" placeholder="¿Qué necesitas? (opcional)" value="${esc(t.help_note || '')}">
@@ -1704,22 +2288,221 @@ function openTaskSheet(t) {
       <button type="submit" class="btn btn-primary">${isNew ? 'Crear tarea' : 'Guardar'}</button>
     </div>
   </form>`);
+
+  renderDraftSubtasksList();
+  renderDraftPhotosList();
+
+  const subInput = document.getElementById('new-subtask-input');
+  if (subInput) {
+    subInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        const val = subInput.value.trim();
+        if (val) {
+          state.draftSubtasks.push({ id: Date.now(), text: val, done: false });
+          subInput.value = '';
+          renderDraftSubtasksList();
+        }
+      }
+    });
+  }
+
+  const photoInput = document.getElementById('draft-photo-input');
+  if (photoInput) {
+    photoInput.addEventListener('change', async (ev) => {
+      const file = ev.target.files && ev.target.files[0];
+      if (!file) return;
+      try {
+        toast('Procesando imagen…');
+        const dataUrl = await compressImageFile(file);
+        const labelSel = document.getElementById('draft-photo-label');
+        const label = labelSel ? labelSel.value : 'Evidencia';
+        state.draftPhotos.push({
+          id: Date.now(),
+          url: dataUrl,
+          label,
+          by: state.me ? state.me.name : '',
+          at: nowIso()
+        });
+        renderDraftPhotosList();
+        toast('📷 Foto agregada', 'ok');
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+      photoInput.value = '';
+    });
+  }
 }
 
 
 function openTaskDetail(t) {
   const obj = t.objective_id ? objById(t.objective_id) : null;
+  const zone = getTaskZone(t);
   openSheet(`
     ${sheetHead('Detalle de la tarea')}
     <div class="stack">
       ${taskCard(t).replace('data-action="open-task"', '')}
       ${t.description ? `<div class="card" style="box-shadow:none;background:var(--bg)">${esc(t.description)}</div>` : ''}
       <dl class="info-grid">
+        ${zone ? `<dt>Zona</dt><dd>${esc(ZONE_MAP[zone] || zone)}</dd>` : ''}
         <dt>Prioridad</dt><dd>${PRIORITY[t.priority]}</dd>
         <dt>Objetivo</dt><dd>${obj ? esc(obj.title) : '—'}</dd>
         <dt>Creada por</dt><dd>${esc(userName(t.created_by))}</dd>
       </dl>
     </div>`);
+}
+
+function openCommentsSheet(t) {
+  const comments = getComments(t);
+  const listHtml = comments.length
+    ? comments.map((c) => `
+        <div class="comment-item">
+          <div class="comment-head">
+            <b>${esc(c.user_name || 'Colaborador')}</b>
+            <span>${fmtDateTime(c.created_at)}</span>
+          </div>
+          <div>${esc(c.text)}</div>
+        </div>
+      `).join('')
+    : '<div class="empty" style="padding:14px">Aún no hay comentarios ni notas de turno en esta tarea.</div>';
+
+  openSheet(`
+    <form data-form="comment" data-id="${t.id}" class="stack">
+      ${sheetHead('💬 Notas y Comentarios')}
+      <p class="muted small" style="margin:0">Tarea: <b>${esc(t.title)}</b></p>
+      <div class="comments-list">${listHtml}</div>
+      <div class="comment-add-row">
+        <input name="comment_text" required maxlength="400" placeholder="Escribe un comentario o nota de relevo…" autofocus>
+        <button type="submit" class="btn btn-primary btn-sm">Enviar</button>
+      </div>
+    </form>
+  `);
+}
+
+function openQuickPhotoSheet(t) {
+  const photos = getPhotos(t);
+  openSheet(`
+    <form data-form="quick-photo" data-id="${t.id}" class="stack">
+      ${sheetHead('📷 Evidencia Fotográfica')}
+      <p class="muted small" style="margin:0">Tarea: <b>${esc(t.title)}</b></p>
+      <div class="grid2">
+        <label class="field"><span>Tipo de foto</span>
+          <select name="photo_label">
+            <option value="Después" selected>✅ Después (Resultado)</option>
+            <option value="Antes">📌 Antes (Estado inicial)</option>
+            <option value="Evidencia">📷 Evidencia general</option>
+            <option value="SOS / Bloqueo">🆘 SOS / Problema</option>
+          </select>
+        </label>
+        <label class="field"><span>Seleccionar o tomar foto *</span>
+          <input type="file" name="photo_file" accept="image/*" capture="environment" required style="padding:8px">
+        </label>
+      </div>
+      ${photos.length ? `
+        <div>
+          <span class="small muted">Fotos actuales (${photos.length}):</span>
+          <div class="photos-grid">
+            ${photos.map((p, idx) => `
+              <div class="photo-thumb" data-action="view-photo" data-id="${t.id}" data-idx="${idx}">
+                <img src="${esc(p.url)}" alt="Foto">
+                <span class="photo-tag">${esc(p.label || 'Foto')}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>` : ''}
+      <div class="sheet-actions">
+        <button type="submit" class="btn btn-primary">${ICON.camera} Guardar foto en la tarea</button>
+      </div>
+    </form>
+  `);
+}
+
+function openShiftSummarySheet() {
+  if (!state.me) return;
+  const me = state.me.id;
+  const all = activeTasks();
+  const mine = all.filter((t) => !t.is_private && isAssignedOrHelper(t, me) && isOpen(t));
+  const urgent = mine.filter(isUrgent);
+  const sosList = all.filter((t) => !t.is_private && t.needs_help && isOpen(t));
+  const freeList = all.filter((t) => !t.is_private && !t.assignee_id && isOpen(t));
+  const doneTodayList = all.filter((t) => isAssignedOrHelper(t, me) && doneToday(t));
+  const loadMin = mine.reduce((s, t) => s + (t.estimated_minutes || 0), 0);
+  const hour = Number(getBogotaParts(new Date()).hour);
+  const greeting = hour < 12 ? '☀️ Buen inicio de jornada' : hour < 18 ? '🌤️ Resumen de tu turno' : '🌙 Resumen de cierre';
+
+  localStorage.setItem('obj_shift_summary_date', `${todayStr()}_${me}`);
+
+  openSheet(`
+    <div class="stack">
+      ${sheetHead(greeting)}
+      <p class="muted" style="margin:0">Hola <b>${esc(state.me.name)}</b>, aquí tienes el panorama rápido de tu turno hoy:</p>
+      <div class="shift-summary-grid">
+        <div class="summary-kpi">
+          <b>${mine.length}</b>
+          <span>Mis tareas activas (${fmtMinutes(loadMin)})</span>
+        </div>
+        <div class="summary-kpi ${urgent.length ? 'warn' : 'good'}">
+          <b>${urgent.length}</b>
+          <span>Urgentes / por vencer</span>
+        </div>
+        <div class="summary-kpi ${sosList.length ? 'warn' : ''}">
+          <b>${sosList.length}</b>
+          <span>Compañeros piden ayuda 🆘</span>
+        </div>
+        <div class="summary-kpi good">
+          <b>${freeList.length} / ${doneTodayList.length}✓</b>
+          <span>Libres / Terminadas hoy</span>
+        </div>
+      </div>
+      ${sosList.length ? `
+        <div class="help-box">
+          <b>🆘 Hay ${sosList.length} tarea(s) pidiendo apoyo:</b>
+          <ul style="margin:6px 0 0;padding-left:18px;font-weight:500">
+            ${sosList.slice(0, 3).map((t) => `<li><b>${esc(t.title)}</b> (${esc(userName(t.assignee_id))})</li>`).join('')}
+          </ul>
+        </div>` : ''}
+      ${urgent.length ? `
+        <div class="card" style="background:var(--bg);box-shadow:none">
+          <b style="font-size:13.5px">⚡ Tu prioridad número 1 ahora:</b>
+          <p style="margin:4px 0 0;font-weight:700;color:var(--blue)">${esc(urgent[0].title)} (${esc(fmtDue(urgent[0].due_at))})</p>
+        </div>` : ''}
+      <div class="sheet-actions">
+        ${sosList.length ? `<button type="button" class="btn btn-warn" data-action="go-board-sos">Ir a apoyar equipo</button>` : ''}
+        <button type="button" class="btn btn-primary" data-action="close-sheet">¡A darle con toda! 💪</button>
+      </div>
+    </div>
+  `);
+}
+
+function maybeShowMorningShiftSummary() {
+  if (!state.me || state.sheetOpen) return;
+  const key = `${todayStr()}_${state.me.id}`;
+  if (localStorage.getItem('obj_shift_summary_date') !== key) {
+    openShiftSummarySheet();
+  }
+}
+
+function openPinConfigSheet() {
+  if (!state.me) return;
+  const currentPin = getUserPin(state.me);
+  openSheet(`
+    <form data-form="pin-config" class="stack" autocomplete="off">
+      ${sheetHead('🔐 PIN de seguridad (4 dígitos)')}
+      <p class="muted small" style="margin:0">Protege tu perfil y tus tareas privadas con un código numérico de 4 dígitos al iniciar sesión.</p>
+      ${currentPin ? `
+        <label class="field"><span>PIN actual *</span>
+          <input type="password" name="current_pin" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" class="pin-input-large" placeholder="••••" required>
+        </label>` : ''}
+      <label class="field"><span>Nuevo PIN de 4 dígitos (deja vacío para desactivar)</span>
+        <input type="password" name="new_pin" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" class="pin-input-large" placeholder="1234" ${currentPin ? '' : 'required'}>
+      </label>
+      <div class="sheet-actions">
+        ${currentPin ? `<button type="button" class="btn btn-danger" data-action="remove-my-pin">Desactivar PIN</button>` : ''}
+        <span class="spacer"></span>
+        <button type="submit" class="btn btn-primary">Guardar PIN</button>
+      </div>
+    </form>
+  `);
 }
 
 function openObjectiveSheet(o) {
@@ -1772,6 +2555,16 @@ function openRoutineSheet(r) {
   <form data-form="routine" data-id="${r.id || ''}" class="stack">
     ${sheetHead(isNew ? 'Nueva rutina diaria' : 'Editar rutina diaria')}
     <label class="field"><span>Tarea *</span><input name="title" required maxlength="150" value="${esc(r.title || '')}" placeholder="Ej: Revisar etiquetas de precio"></label>
+    <div class="grid2">
+      <label class="field"><span>Zona / Deporte</span>
+        <select name="zone">
+          <option value="">— General —</option>
+          ${ZONES.map((z) => `<option value="${esc(z.id)}" ${(r.zone || '') === z.id ? 'selected' : ''}>${esc(z.label)}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field"><span>Objetivo</span><select name="objective_id"><option value="">— Ninguno —</option>
+        ${activeObjectives().map((o) => `<option value="${o.id}" ${r.objective_id === o.id ? 'selected' : ''}>${esc(o.title)}</option>`).join('')}</select></label>
+    </div>
     <label class="field"><span>Descripción</span><textarea name="description" rows="2" maxlength="2000">${esc(r.description || '')}</textarea></label>
     <div class="field"><span>Días</span><div class="daypick">${WEEKDAYS.map(([v, l]) => `<label><input type="checkbox" name="weekdays" value="${v}" ${days.includes(v) ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div></div>
     <div class="grid2">
@@ -1779,8 +2572,6 @@ function openRoutineSheet(r) {
       <label class="field"><span>Tiempo estimado (min)</span><input type="number" name="estimated_minutes" min="0" step="5" value="${r.estimated_minutes ?? 30}"></label>
       <label class="field"><span>Responsable</span><select name="assignee_id"><option value="">— Libre —</option>
         ${activeUsers().map((u) => `<option value="${u.id}" ${r.assignee_id === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select></label>
-      <label class="field"><span>Objetivo</span><select name="objective_id"><option value="">— Ninguno —</option>
-        ${activeObjectives().map((o) => `<option value="${o.id}" ${r.objective_id === o.id ? 'selected' : ''}>${esc(o.title)}</option>`).join('')}</select></label>
     </div>
     <div class="field"><span>Prioridad</span><div class="seg">${Object.keys(PRIORITY).map((p) => radio('priority', p, PRIORITY[p], (r.priority || 'media') === p)).join('')}</div></div>
     <div class="sheet-actions">
@@ -1798,6 +2589,9 @@ function openHelpSheet(t) {
     ${sheetHead('🆘 Pedir ayuda')}
     <p class="muted" style="margin:0">${esc(t.title)}</p>
     <label class="field"><span>¿En qué necesitas ayuda?</span><textarea name="help_note" rows="3" maxlength="500" placeholder="Ej: necesito apoyo con el stock pesado" autofocus></textarea></label>
+    <label class="field"><span>📷 Foto del bloqueo / problema (opcional)</span>
+      <input type="file" name="help_photo" accept="image/*" capture="environment" style="padding:8px">
+    </label>
     <div class="sheet-actions"><button type="submit" class="btn btn-warn">Avisar al equipo</button></div>
   </form>`);
 }
@@ -1816,6 +2610,9 @@ document.addEventListener('click', async (e) => {
   const kind = el.dataset.kind;
 
   switch (a) {
+    case 'noop':
+      e.stopPropagation();
+      break;
     case 'nav':
       state.view = el.dataset.view;
       if (state.view === 'mas') state.more = 'menu';
@@ -1826,6 +2623,124 @@ document.addEventListener('click', async (e) => {
       break;
     case 'more':
       state.more = el.dataset.sub; render(); window.scrollTo(0, 0); break;
+    case 'toggle-theme':
+      toggleTheme();
+      break;
+    case 'toggle-notif-mode':
+      state.notifMode = state.notifMode === 'mine' ? 'all' : 'mine';
+      localStorage.setItem('obj_notif_mode', state.notifMode);
+      toast(
+        state.notifMode === 'mine'
+          ? '🎯 Modo activo: Solo mis tareas y alertas SOS'
+          : '🌐 Modo activo: Todas las alertas del equipo',
+        'ok'
+      );
+      render();
+      break;
+    case 'open-shift-summary':
+      openShiftSummarySheet();
+      break;
+    case 'go-board-sos':
+      closeSheet();
+      state.view = 'tablero';
+      localStorage.setItem('obj_view', 'tablero');
+      render();
+      window.scrollTo(0, 0);
+      break;
+    case 'open-pin-sheet':
+      openPinConfigSheet();
+      break;
+    case 'remove-my-pin':
+      if (!state.me || !confirm('¿Quitar el PIN de 4 dígitos de tu cuenta?')) break;
+      await safeUserPinUpdate(state.me.id, null);
+      closeSheet();
+      toast('🔓 PIN desactivado', 'ok');
+      render();
+      break;
+    case 'admin-reset-pin': {
+      if (!isAdmin() || !id) break;
+      const u = findItem('users', id);
+      if (!u || !confirm(`¿Restablecer (quitar) el PIN de ${u.name}?`)) break;
+      await safeUserPinUpdate(id, null);
+      toast(`🔓 PIN de ${u.name} restablecido`, 'ok');
+      render();
+      break;
+    }
+    case 'filter-zone':
+      state.filters.zone = el.dataset.zone || '';
+      render();
+      break;
+    case 'sync-offline-now':
+      flushOfflineQueue();
+      break;
+    case 'toggle-subtask': {
+      e.stopPropagation();
+      const t = findItem('tasks', id);
+      if (!t) break;
+      const idx = Number(el.dataset.idx);
+      const subtasks = getSubtasks(t).map((s, i) => (i === idx ? { ...s, done: !s.done } : s));
+      await safeTaskUpdate(id, { subtasks, updated_at: nowIso() });
+      render();
+      break;
+    }
+    case 'draft-subtask-add': {
+      const inp = document.getElementById('new-subtask-input');
+      if (!inp) break;
+      const text = inp.value.trim();
+      if (!text) break;
+      state.draftSubtasks.push({ text, done: false });
+      inp.value = '';
+      renderDraftSubtasksList();
+      inp.focus();
+      break;
+    }
+    case 'draft-subtask-toggle': {
+      const idx = Number(el.dataset.idx);
+      if (state.draftSubtasks[idx]) {
+        state.draftSubtasks[idx].done = !state.draftSubtasks[idx].done;
+        renderDraftSubtasksList();
+      }
+      break;
+    }
+    case 'draft-subtask-del': {
+      const idx = Number(el.dataset.idx);
+      state.draftSubtasks.splice(idx, 1);
+      renderDraftSubtasksList();
+      break;
+    }
+    case 'draft-photo-del': {
+      const idx = Number(el.dataset.idx);
+      state.draftPhotos.splice(idx, 1);
+      renderDraftPhotosList();
+      break;
+    }
+    case 'preview-draft-photo': {
+      const idx = Number(el.dataset.idx);
+      const p = state.draftPhotos[idx];
+      if (p) openPhotoLightbox(p.url, `${p.label || 'Evidencia'} · Subida por ${p.by || ''}`);
+      break;
+    }
+    case 'view-photo': {
+      e.stopPropagation();
+      const t = findItem('tasks', id);
+      if (!t) break;
+      const photos = getPhotos(t);
+      const p = photos[Number(el.dataset.idx)];
+      if (p) openPhotoLightbox(p.url, `${p.label || 'Evidencia'} · ${t.title} (${p.by || 'Equipo'})`);
+      break;
+    }
+    case 'quick-photo': {
+      e.stopPropagation();
+      const t = findItem('tasks', id);
+      if (t) openQuickPhotoSheet(t);
+      break;
+    }
+    case 'open-comments': {
+      e.stopPropagation();
+      const t = findItem('tasks', id);
+      if (t) openCommentsSheet(t);
+      break;
+    }
     case 'enable-notifications':
       await requestNotificationPermission();
       break;
@@ -1914,6 +2829,7 @@ document.addEventListener('click', async (e) => {
         due_at: defaultDue(), estimated_minutes: 30, priority: 'media', status: 'sin_iniciar',
         assignee_id: el.dataset.assignee ? Number(el.dataset.assignee) : (isLead() ? null : state.me.id),
         objective_id: el.dataset.objective ? Number(el.dataset.objective) : null,
+        zone: state.filters.zone || '',
         is_private: false,
       });
       break;
@@ -1932,6 +2848,7 @@ document.addEventListener('click', async (e) => {
       e.stopPropagation();
       const status = el.dataset.status;
       const t = findItem('tasks', id);
+      if (!t) break;
       const patch = { status, updated_at: nowIso() };
       if (status === 'en_progreso' && !t.started_at) patch.started_at = nowIso();
       if (status === 'terminada') {
@@ -1945,8 +2862,7 @@ document.addEventListener('click', async (e) => {
       if (status === 'terminada') markNotificationTagHandled(`done-${id}-terminada`);
       else if (status === 'en_progreso') markNotificationTagHandled(`prog-${id}`);
       run(async () => {
-        const { error } = await sb.from('tasks').update(patch).eq('id', id);
-        if (error) throw new Error(error.message);
+        await safeTaskUpdate(id, patch);
         await logActivity('editar', 'tarea', id, `Cambió estado a "${STATUS[status]}" en "${t.title}"`);
         if (!t.is_private && state.me) {
           if (status === 'terminada') {
@@ -1972,10 +2888,10 @@ document.addEventListener('click', async (e) => {
       e.stopPropagation();
       closeSheet();
       const t = findItem('tasks', id);
+      if (!t) break;
       markNotificationTagHandled(`taken-${id}`);
       run(async () => {
-        const { error } = await sb.from('tasks').update({ assignee_id: state.me.id, updated_at: nowIso() }).eq('id', id);
-        if (error) throw new Error(error.message);
+        await safeTaskUpdate(id, { assignee_id: state.me.id, updated_at: nowIso() });
         await logActivity('tomar', 'tarea', id, `Tomó la tarea "${t.title}"`);
         if (!t.is_private && state.me) {
           dispatchRemoteWebPush({
@@ -1992,13 +2908,13 @@ document.addEventListener('click', async (e) => {
       e.stopPropagation();
       closeSheet();
       const t = findItem('tasks', id);
+      if (!t) break;
       const currentHelpers = getHelperIds(t);
       if (!currentHelpers.includes(state.me.id)) {
         const nextHelpers = [...currentHelpers, state.me.id];
         markNotificationTagHandled(`helper-${id}`);
         run(async () => {
-          const { error } = await sb.from('tasks').update({ helper_ids: nextHelpers, updated_at: nowIso() }).eq('id', id);
-          if (error) throw new Error(error.message);
+          await safeTaskUpdate(id, { helper_ids: nextHelpers, updated_at: nowIso() });
           await logActivity('editar', 'tarea', id, `Se unió como ayudante a la tarea "${t.title}"`);
           if (!t.is_private && state.me) {
             dispatchRemoteWebPush({
@@ -2016,11 +2932,11 @@ document.addEventListener('click', async (e) => {
       e.stopPropagation();
       closeSheet();
       const t = findItem('tasks', id);
+      if (!t) break;
       const currentHelpers = getHelperIds(t);
       const nextHelpers = currentHelpers.filter((hid) => hid !== state.me.id);
       run(async () => {
-        const { error } = await sb.from('tasks').update({ helper_ids: nextHelpers, updated_at: nowIso() }).eq('id', id);
-        if (error) throw new Error(error.message);
+        await safeTaskUpdate(id, { helper_ids: nextHelpers, updated_at: nowIso() });
         await logActivity('editar', 'tarea', id, `Dejó de ser ayudante en la tarea "${t.title}"`);
       }, 'Dejaste de apoyar en la tarea');
       break;
@@ -2032,9 +2948,9 @@ document.addEventListener('click', async (e) => {
     case 'help-off': {
       e.stopPropagation();
       const t = findItem('tasks', id);
+      if (!t) break;
       run(async () => {
-        const { error } = await sb.from('tasks').update({ needs_help: false, help_note: '', updated_at: nowIso() }).eq('id', id);
-        if (error) throw new Error(error.message);
+        await safeTaskUpdate(id, { needs_help: false, help_note: '', updated_at: nowIso() });
         await logActivity('editar', 'tarea', id, `Retiró solicitud de ayuda en "${t.title}"`);
       }, 'Solicitud de ayuda retirada');
       break;
@@ -2089,8 +3005,7 @@ document.addEventListener('click', async (e) => {
         patch.helper_ids = [];
       }
       run(async () => {
-        const { error } = await sb.from('tasks').update(patch).eq('id', id);
-        if (error) throw new Error(error.message);
+        await safeTaskUpdate(id, patch);
         await logActivity('editar', 'tarea', id, `${willBePrivate ? 'Cambió a privada' : 'Hizo pública'} la tarea "${t.title}"`);
       }, willBePrivate ? 'Tarea cambiada a privada (solo tú la ves)' : 'Tarea hecha pública (visible para el equipo)');
       break;
@@ -2101,10 +3016,13 @@ document.addEventListener('click', async (e) => {
       if (!item || !confirm(`¿Ocultar "${item.title}"?\nNo se perderá: podrás restaurarlo en Más → Elementos ocultos.`)) return;
       closeSheet();
       run(async () => {
-        const { error } = await sb.from(KIND_TABLE[kind]).update({
-          active: false, hidden_by: state.me.id, hidden_at: nowIso(), updated_at: nowIso()
-        }).eq('id', id);
-        if (error) throw new Error(error.message);
+        const patch = { active: false, hidden_by: state.me.id, hidden_at: nowIso(), updated_at: nowIso() };
+        if (kind === 'tasks') {
+          await safeTaskUpdate(id, patch);
+        } else {
+          const { error } = await sb.from(KIND_TABLE[kind]).update(patch).eq('id', id);
+          if (error) throw new Error(error.message);
+        }
         await logActivity('ocultar', kind === 'tasks' ? 'tarea' : 'objetivo', id, `Ocultó "${item.title}"`);
       }, 'Oculto. Puedes restaurarlo en Elementos ocultos.');
       break;
@@ -2112,10 +3030,13 @@ document.addEventListener('click', async (e) => {
     case 'restore': {
       const item = findItem(kind, id);
       run(async () => {
-        const { error } = await sb.from(KIND_TABLE[kind]).update({
-          active: true, hidden_by: null, hidden_at: null, updated_at: nowIso()
-        }).eq('id', id);
-        if (error) throw new Error(error.message);
+        const patch = { active: true, hidden_by: null, hidden_at: null, updated_at: nowIso() };
+        if (kind === 'tasks') {
+          await safeTaskUpdate(id, patch);
+        } else {
+          const { error } = await sb.from(KIND_TABLE[kind]).update(patch).eq('id', id);
+          if (error) throw new Error(error.message);
+        }
         await logActivity('restaurar', kind === 'tasks' ? 'tarea' : 'objetivo', id, `Restauró "${item.title}"`);
       }, 'Restaurado');
       break;
@@ -2197,8 +3118,116 @@ document.addEventListener('submit', async (e) => {
     return;
   }
 
+  if (kind === 'pin-verify') {
+    const uid = Number(form.dataset.userid);
+    const user = state.users.find((u) => u.id === uid) || state._pendingLoginUser;
+    const entered = String(fd.get('pin_code') || '').trim();
+    const expected = getUserPin(user);
+    if (entered !== expected) {
+      toast('❌ PIN incorrecto. Intenta de nuevo.', 'error');
+      if (btn) btn.disabled = false;
+      form.reset();
+      return;
+    }
+    closeSheet();
+    await completeLogin(user);
+    return;
+  }
+
+  if (kind === 'pin-config') {
+    if (!state.me) { if (btn) btn.disabled = false; return; }
+    const existingPin = getUserPin(state.me);
+    if (existingPin) {
+      const currentPin = String(fd.get('current_pin') || '').trim();
+      if (currentPin !== existingPin) {
+        toast('El PIN actual no coincide.', 'error');
+        if (btn) btn.disabled = false;
+        return;
+      }
+    }
+    const newPin = String(fd.get('new_pin') || '').trim();
+    if (!/^\d{4}$/.test(newPin)) {
+      toast('El PIN debe tener exactamente 4 números.', 'error');
+      if (btn) btn.disabled = false;
+      return;
+    }
+    await safeUserPinUpdate(state.me.id, newPin);
+    toast('🔒 PIN de 4 dígitos guardado', 'ok');
+    closeSheet();
+    render();
+    return;
+  }
+
+  if (kind === 'comment') {
+    const t = findItem('tasks', id);
+    const text = String(fd.get('comment_text') || '').trim();
+    if (!t || !text) { if (btn) btn.disabled = false; return; }
+    const comments = [
+      ...getComments(t),
+      {
+        id: Date.now(),
+        user_id: state.me.id,
+        user_name: state.me.name,
+        text,
+        created_at: nowIso()
+      }
+    ];
+    markNotificationTagHandled(`comment-${id}-${comments.length}`);
+    await safeTaskUpdate(id, { comments, updated_at: nowIso() });
+    await logActivity('comentar', 'tarea', id, `Comentó en "${t.title}": ${text.slice(0, 60)}`);
+    if (!t.is_private && state.me) {
+      dispatchRemoteWebPush({
+        title: `💬 Nota en "${t.title}"`,
+        body: `${state.me.name}: "${text.slice(0, 80)}"`,
+        tag: `comment-${id}-${comments.length}`,
+        excludeUserId: state.me.id
+      });
+    }
+    toast('💬 Nota agregada', 'ok');
+    const updatedTask = findItem('tasks', id) || { ...t, comments };
+    openCommentsSheet(updatedTask);
+    render();
+    return;
+  }
+
+  if (kind === 'quick-photo') {
+    const t = findItem('tasks', id);
+    const fileInput = form.elements.photo_file;
+    const file = fileInput && fileInput.files && fileInput.files[0];
+    const label = String(fd.get('photo_label') || 'Después');
+    if (!t || !file) {
+      toast('Selecciona o toma una foto.', 'error');
+      if (btn) btn.disabled = false;
+      return;
+    }
+    try {
+      const dataUrl = await compressImageFile(file);
+      const photos = [
+        ...getPhotos(t),
+        {
+          id: Date.now(),
+          url: dataUrl,
+          label,
+          by: state.me ? state.me.name : 'Equipo',
+          at: nowIso()
+        }
+      ];
+      await safeTaskUpdate(id, { photos, updated_at: nowIso() });
+      await logActivity('foto', 'tarea', id, `Subió foto (${label}) en "${t.title}"`);
+      toast('📷 Evidencia fotográfica guardada', 'ok');
+      closeSheet();
+      render();
+    } catch (err) {
+      toast('Error procesando foto: ' + err.message, 'error');
+      if (btn) btn.disabled = false;
+    }
+    return;
+  }
+
   if (kind === 'task') {
     const data = Object.fromEntries(fd.entries());
+    // Eliminar campos auxiliares del formulario que no son columnas de DB
+    delete data.photo_label;
     data.needs_help = form.elements.needs_help.checked;
     if (!data.needs_help) data.help_note = '';
 
@@ -2214,6 +3243,16 @@ document.addEventListener('submit', async (e) => {
       const selectedHelpers = fd.getAll('helper_ids').map(Number).filter(Boolean);
       data.helper_ids = selectedHelpers;
     }
+
+    // Si quedó texto escrito en el input de subtarea sin darle a "+ Agregar", incluirlo
+    const pendingSubInp = document.getElementById('new-subtask-input');
+    if (pendingSubInp && pendingSubInp.value.trim()) {
+      state.draftSubtasks.push({ text: pendingSubInp.value.trim(), done: false });
+    }
+
+    data.zone = data.zone || '';
+    data.subtasks = state.draftSubtasks || [];
+    data.photos = state.draftPhotos || [];
 
     ['assignee_id', 'objective_id', 'due_at'].forEach((k) => { if (!data[k]) data[k] = null; });
     if (data.assignee_id) data.assignee_id = Number(data.assignee_id);
@@ -2236,29 +3275,28 @@ document.addEventListener('submit', async (e) => {
         if (data.needs_help) markNotificationTagHandled(`help-${id}`);
         if (data.assignee_id) markNotificationTagHandled(`taken-${id}`);
         markNotificationTagHandled(`helper-${id}`);
-        const { error } = await sb.from('tasks').update(data).eq('id', id);
-        if (error) throw new Error(error.message);
+        await safeTaskUpdate(id, data);
         await logActivity('editar', 'tarea', id, `Modificó la tarea "${data.title}"`);
       } else {
         data.created_by = state.me.id;
         data.created_at = nowIso();
-        const { data: created, error } = await sb.from('tasks').insert([data]).select().single();
-        if (error) throw new Error(error.message);
-        markNotificationTagHandled(`task-new-${created.id}`);
-        await logActivity('crear', 'tarea', created.id, `Creó la tarea "${data.title}"`);
+        data.comments = [];
+        const { data: created } = await safeTaskInsert(data);
+        const createdId = created ? created.id : Date.now();
+        markNotificationTagHandled(`task-new-${createdId}`);
+        await logActivity('crear', 'tarea', createdId, `Creó la tarea "${data.title}"`);
         if (!data.is_private && state.me) {
           const assigneeLabel = data.assignee_id ? userName(data.assignee_id) : 'Sin asignar';
           dispatchRemoteWebPush({
             title: '🆕 Nueva tarea creada',
             body: `"${data.title}" · Responsable: ${assigneeLabel}`,
-            tag: `task-new-${created.id}`,
+            tag: `task-new-${createdId}`,
             excludeUserId: state.me.id
           });
         }
       }
     }, id ? 'Tarea actualizada' : 'Tarea creada');
-  }
- else if (kind === 'objective') {
+  } else if (kind === 'objective') {
     const data = Object.fromEntries(fd.entries());
     ['start_date', 'end_date', 'metric_target'].forEach((k) => { if (!data[k]) data[k] = null; });
     if (data.metric_target) data.metric_target = Number(data.metric_target);
@@ -2302,27 +3340,55 @@ document.addEventListener('submit', async (e) => {
     data.updated_at = nowIso();
 
     ok = await run(async () => {
+      const coreRoutine = { ...data };
+      delete coreRoutine.zone;
       if (id) {
         const { error } = await sb.from('routines').update(data).eq('id', id);
-        if (error) throw new Error(error.message);
+        if (error) {
+          if (/column|schema cache/i.test(error.message)) {
+            const { error: err2 } = await sb.from('routines').update(coreRoutine).eq('id', id);
+            if (err2) throw new Error(err2.message);
+          } else throw new Error(error.message);
+        }
         await logActivity('editar', 'rutina', id, `Modificó rutina "${data.title}"`);
       } else {
         data.created_by = state.me.id;
         data.created_at = nowIso();
-        const { data: created, error } = await sb.from('routines').insert([data]).select().single();
-        if (error) throw new Error(error.message);
-        await logActivity('crear', 'rutina', created.id, `Creó rutina diaria "${data.title}"`);
+        coreRoutine.created_by = state.me.id;
+        coreRoutine.created_at = data.created_at;
+        let createdRes = await sb.from('routines').insert([data]).select().single();
+        if (createdRes.error && /column|schema cache/i.test(createdRes.error.message)) {
+          createdRes = await sb.from('routines').insert([coreRoutine]).select().single();
+        }
+        if (createdRes.error) throw new Error(createdRes.error.message);
+        await logActivity('crear', 'rutina', createdRes.data.id, `Creó rutina diaria "${data.title}"`);
       }
     }, id ? 'Rutina actualizada' : 'Rutina creada');
   } else if (kind === 'help') {
     const t = findItem('tasks', id);
     const helpNote = fd.get('help_note') || '';
+    const helpFile = form.elements.help_photo && form.elements.help_photo.files && form.elements.help_photo.files[0];
     markNotificationTagHandled(`help-${id}`);
     ok = await run(async () => {
-      const { error } = await sb.from('tasks').update({
-        needs_help: true, help_note: helpNote, updated_at: nowIso()
-      }).eq('id', id);
-      if (error) throw new Error(error.message);
+      const patch = {
+        needs_help: true,
+        help_note: helpNote,
+        updated_at: nowIso()
+      };
+      if (helpFile && t) {
+        const dataUrl = await compressImageFile(helpFile);
+        patch.photos = [
+          ...getPhotos(t),
+          {
+            id: Date.now(),
+            url: dataUrl,
+            label: 'SOS / Bloqueo',
+            by: state.me ? state.me.name : 'Equipo',
+            at: nowIso()
+          }
+        ];
+      }
+      await safeTaskUpdate(id, patch);
       await logActivity('editar', 'tarea', id, `Pidió ayuda en "${t.title}"`);
       if (t && !t.is_private && state.me) {
         dispatchRemoteWebPush({
@@ -2341,7 +3407,39 @@ document.addEventListener('submit', async (e) => {
 
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.sheetOpen) closeSheet(); });
 
-/* ---------- Autenticación por Nombre ---------- */
+/* ---------- Autenticación por Nombre (+ PIN opcional de 4 dígitos) ---------- */
+function openPinVerifySheet(user) {
+  state._pendingLoginUser = user;
+  openSheet('🔒 Ingresa tu PIN', `
+  <form data-form="pin-verify" data-userid="${user.id}">
+    <p class="muted" style="margin-top:0;text-align:center">Hola <strong>${esc(user.name)}</strong>, tu cuenta está protegida con un PIN de 4 dígitos.</p>
+    <label class="field"><span>PIN de 4 dígitos</span>
+      <input type="password" name="pin_code" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required class="pin-input-large" placeholder="••••" autofocus>
+    </label>
+    <p class="muted" style="font-size:.78rem;text-align:center">¿Olvidaste tu PIN? Pídele a un Administrador que lo restablezca en Más → Equipo.</p>
+    <div class="sheet-actions">
+      <button type="button" class="btn btn-ghost" data-action="close-sheet">Cancelar</button>
+      <button type="submit" class="btn btn-primary">Entrar</button>
+    </div>
+  </form>`);
+}
+
+async function completeLogin(user) {
+  try {
+    if (navigator.onLine && sb) {
+      await sb.from('users').update({ last_login: nowIso() }).eq('id', user.id);
+    }
+    state.me = user;
+    localStorage.setItem('obj_user', JSON.stringify(user));
+    state.view = 'hoy';
+    await logActivity('login', 'usuario', user.id, 'Entró a la aplicación');
+    await refresh();
+    toast(`¡Hola, ${user.name}!`, 'ok');
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
 async function doLogin(name) {
   name = String(name || '').trim();
   if (name.length < 2) { toast('Escribe tu nombre.', 'error'); return; }
@@ -2363,15 +3461,15 @@ async function doLogin(name) {
       user = created;
     } else {
       if (!user.active) throw new Error('Tu usuario está desactivado.');
-      await sb.from('users').update({ last_login: nowIso() }).eq('id', user.id);
     }
 
-    state.me = user;
-    localStorage.setItem('obj_user', JSON.stringify(user));
-    state.view = 'hoy';
-    await logActivity('login', 'usuario', user.id, 'Entró a la aplicación');
-    await refresh();
-    toast(`¡Hola, ${user.name}!`, 'ok');
+    const pin = getUserPin(user);
+    if (pin) {
+      openPinVerifySheet(user);
+      return;
+    }
+
+    await completeLogin(user);
   } catch (err) {
     toast(err.message, 'error');
   }
@@ -2391,12 +3489,27 @@ function initRealtime() {
 
 /* ---------- Arranque ---------- */
 (async function init() {
-  // Registrar Service Worker inmediatamente al arrancar (sin esperar a refresh, porque el evento 'load' ya pasó)
+  applyTheme(state.theme);
+
+  window.addEventListener('online', () => {
+    state.isOnline = true;
+    render();
+    flushOfflineQueue();
+  });
+  window.addEventListener('offline', () => {
+    state.isOnline = false;
+    render();
+  });
+
+  // Registrar Service Worker inmediatamente al arrancar
   ensureServiceWorker();
 
   if (sb) {
     initRealtime();
     try { await refresh(); } catch (e) { console.error(e); }
+    if (navigator.onLine && state.offlineQueue.length) {
+      flushOfflineQueue();
+    }
   }
   render();
   ensureServiceWorker();

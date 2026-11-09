@@ -1,5 +1,5 @@
 // Service Worker para PWA, notificaciones nativas al dispositivo y sincronización en segundo plano
-const CACHE_NAME = 'objetivos-v7';
+const CACHE_NAME = 'objetivos-v8';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
