@@ -302,11 +302,15 @@ function saveUserPinLocal(uid, pin) {
   } catch (e) {}
 }
 
+function applyTheme(theme) {
+  if (theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+  else document.documentElement.removeAttribute('data-theme');
+}
+
 function toggleTheme() {
   state.theme = state.theme === 'dark' ? 'light' : 'dark';
   localStorage.setItem('obj_theme', state.theme);
-  if (state.theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
-  else document.documentElement.removeAttribute('data-theme');
+  applyTheme(state.theme);
   render();
 }
 
@@ -519,7 +523,7 @@ async function ensureServiceWorker() {
       });
     }
     if (!swRegPromise) {
-      swRegPromise = navigator.serviceWorker.register('./sw.js?v=8');
+      swRegPromise = navigator.serviceWorker.register('./sw.js?v=9');
     }
     const reg = await Promise.race([
       swRegPromise,
@@ -3410,8 +3414,9 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.sh
 /* ---------- Autenticación por Nombre (+ PIN opcional de 4 dígitos) ---------- */
 function openPinVerifySheet(user) {
   state._pendingLoginUser = user;
-  openSheet('🔒 Ingresa tu PIN', `
-  <form data-form="pin-verify" data-userid="${user.id}">
+  openSheet(`
+  <form data-form="pin-verify" data-userid="${user.id}" class="stack">
+    ${sheetHead('🔒 Ingresa tu PIN')}
     <p class="muted" style="margin-top:0;text-align:center">Hola <strong>${esc(user.name)}</strong>, tu cuenta está protegida con un PIN de 4 dígitos.</p>
     <label class="field"><span>PIN de 4 dígitos</span>
       <input type="password" name="pin_code" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required class="pin-input-large" placeholder="••••" autofocus>
@@ -3419,6 +3424,7 @@ function openPinVerifySheet(user) {
     <p class="muted" style="font-size:.78rem;text-align:center">¿Olvidaste tu PIN? Pídele a un Administrador que lo restablezca en Más → Equipo.</p>
     <div class="sheet-actions">
       <button type="button" class="btn btn-ghost" data-action="close-sheet">Cancelar</button>
+      <span class="spacer"></span>
       <button type="submit" class="btn btn-primary">Entrar</button>
     </div>
   </form>`);
