@@ -81,7 +81,7 @@ const state = {
   users: [], objectives: [], tasks: [], routines: [], activity: [],
   view: localStorage.getItem('obj_view') || 'hoy',
   more: 'menu',
-  filters: { person: '', objective: '', zone: '', status: 'sin_iniciar', activityUser: '' },
+  filters: { person: '', objective: '', zone: '', status: 'sin_iniciar', activityUser: '', activityKind: '' },
   sheetOpen: false,
   showAllDoneToday: false,
   boardDoneFilter: 'recientes', // 'recientes' (últimas 5 o de hoy) | 'semana' (últimos 7 días) | 'todas'
@@ -91,6 +91,9 @@ const state = {
   offlineQueue: JSON.parse(localStorage.getItem('obj_offline_queue') || '[]'),
   draftSubtasks: [],
   draftPhotos: [],
+  statsPeriod: '30d', // '7d' | '30d' | 'month' | 'all'
+  statsChartPerson: '',
+  statsChartZero: true,
 };
 
 // Aplicar tema inmediatamente
@@ -365,24 +368,64 @@ function shouldNotifyMeForTask(t, isSos = false) {
   return Number(t.assignee_id) === myId || getHelperIds(t).includes(myId) || Number(t.created_by) === myId;
 }
 
-// Calcula el ranking de compañerismo (quiénes más han apoyado tareas como ayudantes)
+// Calcula el ranking de compañerismo (quiénes más han apoyado tareas como ayudantes o sacado adelante tareas de compañeros)
 function getCompanerismoStats() {
   const allPublic = state.tasks.filter((t) => t.active && !t.is_private);
   const stats = activeUsers().map((u) => {
-    const helpedTasks = allPublic.filter((t) => getHelperIds(t).includes(u.id) && t.assignee_id !== u.id);
-    const helpedDone = helpedTasks.filter((t) => t.status === 'terminada');
-    const helpedMinutes = helpedTasks.reduce((s, t) => s + (t.estimated_minutes || 0), 0);
-    // Puntaje: 2 puntos por tarea apoyada terminada + 1 punto por tarea apoyada en curso
-    const score = helpedDone.length * 2 + (helpedTasks.length - helpedDone.length);
+    const uid = Number(u.id);
+    const items = [];
+
+    for (const t of allPublic) {
+      const assigneeId = t.assignee_id ? Number(t.assignee_id) : null;
+      const completedById = t.completed_by ? Number(t.completed_by) : null;
+      const otherHelpers = getHelperIds(t).filter((hid) => hid !== assigneeId);
+      const inHelpers = otherHelpers.includes(uid);
+
+      // Si una tarea tiene > 3 ayudantes marcados, es una tarea masiva/grupal asignada a todo el equipo;
+      // en ese caso solo cuenta como apoyo individual si la persona la finalizó, comentó o subió foto.
+      const isMassTask = otherHelpers.length > 3;
+      const participatedInTask =
+        completedById === uid ||
+        getComments(t).some((c) => Number(c.user_id) === uid || c.user_name === u.name) ||
+        getPhotos(t).some((p) => p.by === u.name);
+
+      const isDirectHelper = inHelpers && (!isMassTask || participatedInTask);
+      const completedForTeammate =
+        t.status === 'terminada' &&
+        completedById === uid &&
+        Boolean(assigneeId && assigneeId !== uid);
+
+      if (isDirectHelper || completedForTeammate) {
+        items.push({
+          task: t,
+          isDirectHelper,
+          completedForTeammate,
+          isDone: t.status === 'terminada'
+        });
+      }
+    }
+
+    const doneItems = items.filter((x) => x.isDone);
+    const completedForOthersCount = items.filter((x) => x.completedForTeammate).length;
+    const helpedMinutes = items.reduce((s, x) => s + (x.task.estimated_minutes || 0), 0);
+    // Puntaje: 3 pts si finalizó la tarea de otro compañero, 2 pts por apoyo terminado, 1 pt por apoyo en curso
+    const score = items.reduce((s, x) => {
+      if (x.completedForTeammate) return s + 3;
+      if (x.isDone) return s + 2;
+      return s + 1;
+    }, 0);
+
     return {
       user: u,
-      totalHelped: helpedTasks.length,
-      doneHelped: helpedDone.length,
+      items,
+      totalHelped: items.length,
+      doneHelped: doneItems.length,
+      completedForOthersCount,
       helpedMinutes,
       score
     };
   }).filter((x) => x.totalHelped > 0)
-    .sort((a, b) => b.score - a.score || b.doneHelped - a.doneHelped || b.helpedMinutes - a.helpedMinutes);
+    .sort((a, b) => b.score - a.score || b.doneHelped - a.doneHelped || b.completedForOthersCount - a.completedForOthersCount || b.helpedMinutes - a.helpedMinutes);
   return stats;
 }
 
@@ -523,7 +566,7 @@ async function ensureServiceWorker() {
       });
     }
     if (!swRegPromise) {
-      swRegPromise = navigator.serviceWorker.register('./sw.js?v=9');
+      swRegPromise = navigator.serviceWorker.register('./sw.js?v=11');
     }
     const reg = await Promise.race([
       swRegPromise,
@@ -1199,6 +1242,88 @@ async function logActivity(action, entity, entity_id, summary, details = null) {
   }
 }
 
+let dailyCheckinInFlight = false;
+
+// Registra automáticamente el ingreso diario cuando el usuario ya tiene la sesión iniciada en su dispositivo
+async function ensureDailySessionEntryLogged() {
+  if (!sb || !navigator.onLine || !state.me || !state.me.id || dailyCheckinInFlight) return;
+  const uid = Number(state.me.id);
+  const today = todayStr();
+  const dateKey = `obj_daily_entry_${uid}`;
+  const pingKey = `obj_last_ping_${uid}`;
+  const nowMs = Date.now();
+  const lastPing = Number(localStorage.getItem(pingKey) || 0);
+  const isNewDayOnDevice = localStorage.getItem(dateKey) !== today;
+
+  // Si ya se registró hoy en este dispositivo y han pasado menos de 15 minutos, no hacer nada
+  if (!isNewDayOnDevice && (nowMs - lastPing < 15 * 60 * 1000)) return;
+
+  dailyCheckinInFlight = true;
+  try {
+    const isoNow = nowIso();
+    localStorage.setItem(pingKey, String(nowMs));
+
+    if (isNewDayOnDevice) {
+      localStorage.setItem(dateKey, today);
+      // Verificar en Supabase si ya existe un registro de ingreso (login) hoy para este usuario (en hora Bogotá -05:00)
+      const startOfTodayBogota = `${today}T00:00:00-05:00`;
+      const { data: existingToday } = await sb
+        .from('activity')
+        .select('id')
+        .eq('user_id', uid)
+        .eq('action', 'login')
+        .gte('created_at', startOfTodayBogota)
+        .limit(1);
+
+      if (!existingToday || existingToday.length === 0) {
+        await logActivity('login', 'usuario', uid, 'Ingresó a la aplicación (inicio de jornada)');
+      }
+    }
+
+    // Mantener actualizado last_login en la tabla users para que "Último ingreso" sea siempre real
+    await sb.from('users').update({ last_login: isoNow }).eq('id', uid);
+    if (state.me && Number(state.me.id) === uid) {
+      state.me.last_login = isoNow;
+      localStorage.setItem('obj_user', JSON.stringify(state.me));
+    }
+    const uInState = state.users.find((u) => Number(u.id) === uid);
+    if (uInState) uInState.last_login = isoNow;
+  } catch (e) {
+    console.warn('No se pudo registrar el check-in diario:', e);
+  } finally {
+    dailyCheckinInFlight = false;
+  }
+}
+
+let autoFaltanteInFlight = false;
+
+// Pasa automáticamente a estado "faltante" las tareas de días anteriores que quedaron en "sin_iniciar"
+async function autoMarkOverdueAsFaltante() {
+  if (!sb || !navigator.onLine || autoFaltanteInFlight) return;
+  const today = todayStr();
+  const toMark = state.tasks.filter((t) => {
+    if (!t.active || t.status !== 'sin_iniciar' || !t.due_at) return false;
+    const d = parseLocal(t.due_at);
+    return d && dateStr(d) < today;
+  });
+  if (!toMark.length) return;
+
+  autoFaltanteInFlight = true;
+  try {
+    const ids = toMark.map((t) => t.id);
+    const isoNow = nowIso();
+    for (const t of toMark) {
+      t.status = 'faltante';
+      t.updated_at = isoNow;
+    }
+    await sb.from('tasks').update({ status: 'faltante', updated_at: isoNow }).in('id', ids);
+  } catch (e) {
+    console.warn('Error en autoMarkOverdueAsFaltante:', e);
+  } finally {
+    autoFaltanteInFlight = false;
+  }
+}
+
 async function generateRoutineTasks() {
   if (!sb || !navigator.onLine || !state.routines.length) return;
   const today = todayStr();
@@ -1309,8 +1434,12 @@ async function refresh() {
     }
   }
 
+  await ensureDailySessionEntryLogged();
+  await autoMarkOverdueAsFaltante();
   await generateRoutineTasks();
-  if (state.view === 'actividad') await loadActivity(false);
+  if (state.view === 'actividad' || (state.view === 'mas' && state.more === 'estadisticas')) {
+    await loadActivity(false);
+  }
   render();
   checkDueTasksForNotification();
   maybeShowMorningShiftSummary();
@@ -1320,6 +1449,7 @@ async function refresh() {
 async function silentRefresh() {
   if (!sb || !state.me || !navigator.onLine) return;
   try {
+    ensureDailySessionEntryLogged();
     if (state.offlineQueue.length) {
       await flushOfflineQueue();
       return;
@@ -1342,7 +1472,7 @@ async function silentRefresh() {
 
 async function loadActivity(rerender = true) {
   if (!sb || !navigator.onLine) return;
-  let q = sb.from('activity').select('*').order('id', { ascending: false }).limit(200);
+  let q = sb.from('activity').select('*').order('id', { ascending: false }).limit(400);
   if (state.filters.activityUser) q = q.eq('user_id', Number(state.filters.activityUser));
   const { data, error } = await q;
   if (!error) state.activity = data || [];
@@ -1532,6 +1662,9 @@ function taskCard(t) {
         if (t.status === 'en_progreso') {
           actions.push(`<button class="btn btn-success btn-sm" data-action="task-status" data-status="terminada" data-id="${t.id}">✓ Terminar</button>`);
         }
+        if (t.status === 'faltante' || u.level === 'overdue') {
+          actions.push(`<button class="btn btn-ghost btn-sm" data-action="reschedule-today" data-id="${t.id}" title="Mover fecha límite para hoy en 1 toque">📅 Reprogramar hoy</button>`);
+        }
         if (isMyTask || amHelper) {
           actions.push(t.needs_help
             ? `<button class="btn btn-ghost btn-sm" data-action="help-off" data-id="${t.id}">Ya no necesito ayuda</button>`
@@ -1577,6 +1710,11 @@ function taskCard(t) {
       }).join('')}
     </span>` : '';
 
+  // Detectar si es tarea grupal (tiene casillas por participante o más de 3 ayudantes)
+  const hasMemberChecks = subtasks.some((s) => s.is_member_check || /^👤\s/.test(s.text || ''));
+  const isGroupTask = hasMemberChecks || helpers.length > 3;
+  const myNameLower = (state.me && state.me.name ? state.me.name : '').toLowerCase();
+
   // Renderizar Checklist de Subtareas interactivo en la tarjeta
   let subtasksHtml = '';
   if (subtasks.length > 0) {
@@ -1585,16 +1723,19 @@ function taskCard(t) {
     subtasksHtml = `
       <div class="subtasks-card-preview" data-action="noop">
         <div class="subtasks-progress-head">
-          <span>☑️ Pasos (${doneSub}/${subtasks.length})</span>
+          <span>${hasMemberChecks ? '👥 Avance por persona' : '☑️ Pasos'} (${doneSub}/${subtasks.length})</span>
           <span>${pctSub}%</span>
         </div>
         <div class="subtasks-bar"><i style="width:${pctSub}%"></i></div>
-        ${subtasks.map((st, idx) => `
-          <label class="subtask-row ${st.done ? 'done' : ''}" data-action="toggle-subtask" data-id="${t.id}" data-idx="${idx}">
+        ${subtasks.map((st, idx) => {
+          const isMineSub = (st.user_id && Number(st.user_id) === me) || (myNameLower && String(st.text || '').toLowerCase().includes(myNameLower));
+          return `
+          <label class="subtask-row ${st.done ? 'done' : ''} ${isMineSub ? 'is-mine' : ''}" data-action="toggle-subtask" data-id="${t.id}" data-idx="${idx}">
             <input type="checkbox" ${st.done ? 'checked' : ''} ${canEditTask(t) ? '' : 'disabled'} tabindex="-1">
             <span>${esc(st.text)}</span>
-          </label>
-        `).join('')}
+            ${isMineSub && !st.done ? '<span class="pill st-en_progreso" style="margin-left:auto;font-size:10.5px;padding:1px 6px">Tu parte</span>' : ''}
+          </label>`;
+        }).join('')}
       </div>`;
   }
 
@@ -1624,6 +1765,7 @@ function taskCard(t) {
     <div class="task-top">
       <span class="pill st-${t.status}">${STATUS[t.status]}</span>
       ${zone ? `<span class="pill pill-zone">${esc(ZONE_MAP[zone] || zone)}</span>` : ''}
+      ${isGroupTask ? `<span class="pill pill-group" title="Tarea grupal del equipo">👥 Grupal</span>` : ''}
       ${t.is_private ? `<span class="pill pill-private" title="Solo tú puedes ver esta tarea">${ICON.lock} Privada</span>` : ''}
       ${t.priority !== 'media' ? `<span class="pill prio-${t.priority}">Prioridad ${PRIORITY[t.priority].toLowerCase()}</span>` : ''}
       ${t.routine_id ? `<span class="pill">${ICON.repeat} Diaria</span>` : ''}
@@ -1667,21 +1809,32 @@ function renderZoneFilterChips() {
     </div>`;
 }
 
-function renderCompanerismoCard() {
-  const stats = getCompanerismoStats().slice(0, 4);
-  if (!stats.length) return '';
+function renderCompanerismoCard(showAll = false) {
+  const allStats = getCompanerismoStats();
+  const stats = showAll ? allStats : allStats.slice(0, 4);
+  if (!stats.length) {
+    return showAll ? `
+      <div class="companerismo-card">
+        <div class="companerismo-head">
+          <div>
+            <h2 style="font-size:15.5px;display:flex;align-items:center;gap:6px">🏆 Reconocimiento al Compañerismo (Top Apoyos)</h2>
+            <p class="small muted" style="margin:2px 0 0">Aún no hay apoyos directos registrados. Únete con el botón "🤝 Apoyar como ayudante" en las tareas de tus compañeros.</p>
+          </div>
+        </div>
+      </div>` : '';
+  }
   const medals = ['🥇', '🥈', '🥉', '🏅'];
   return `
     <div class="companerismo-card">
       <div class="companerismo-head">
         <div>
           <h2 style="font-size:15.5px;display:flex;align-items:center;gap:6px">🏆 Reconocimiento al Compañerismo (Top Apoyos)</h2>
-          <p class="small muted" style="margin:2px 0 0">Colaboradores que más se han sumado como ayudantes para apoyar al equipo.</p>
+          <p class="small muted" style="margin:2px 0 0">Colaboradores que más han apoyado directamente o sacado adelante tareas de sus compañeros. <b>Toca un nombre para ver el detalle.</b></p>
         </div>
       </div>
       <div class="companerismo-grid">
         ${stats.map((s, idx) => `
-          <div class="leader-item">
+          <div class="leader-item" data-action="open-companerismo-detail" data-id="${s.user.id}" style="cursor:pointer" title="Ver tareas apoyadas por ${esc(s.user.name)}">
             <span class="medal-icon">${medals[idx] || '🤝'}</span>
             <div class="leader-info">
               <b>${esc(s.user.name)}</b>
@@ -1691,6 +1844,52 @@ function renderCompanerismoCard() {
         `).join('')}
       </div>
     </div>`;
+}
+
+function openCompanerismoDetailSheet(userId) {
+  const stat = getCompanerismoStats().find((s) => s.user.id === Number(userId));
+  const u = userById(userId);
+  if (!u) return;
+  const items = stat ? stat.items : [];
+  const rowsHtml = items.length
+    ? items.map((x) => {
+        const t = x.task;
+        const ownerName = t.assignee_id ? userName(t.assignee_id) : 'Equipo';
+        const badge = x.completedForTeammate
+          ? `<span class="pill st-terminada">✓ Sacó adelante tarea de ${esc(ownerName)}</span>`
+          : `<span class="pill st-en_progreso">🤝 Apoyó como ayudante a ${esc(ownerName)}</span>`;
+        return `
+          <div class="card" style="padding:10px 12px;margin-bottom:8px;box-shadow:none;border:1px solid var(--line)">
+            <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:6px">
+              <b>${esc(t.title)}</b>
+              <span class="pill st-${t.status}">${STATUS[t.status]}</span>
+            </div>
+            <div class="row" style="margin-top:6px;flex-wrap:wrap;gap:6px">
+              ${badge}
+              <span class="small muted">· ${fmtMinutes(t.estimated_minutes)} · ${fmtDue(t.due_at)}</span>
+            </div>
+          </div>`;
+      }).join('')
+    : '<p class="muted">Sin tareas de apoyo directo registradas aún.</p>';
+
+  openSheet(`
+    <div class="stack">
+      ${sheetHead(`🏆 Apoyos de ${u.name}`)}
+      <div class="stats" style="margin:0">
+        <div class="stat"><b>${stat ? stat.totalHelped : 0}</b><span>Total apoyos</span></div>
+        <div class="stat good"><b>${stat ? stat.doneHelped : 0}</b><span>Terminadas</span></div>
+        <div class="stat"><b>${stat ? stat.completedForOthersCount : 0}</b><span>Finalizadas por compañero</span></div>
+        <div class="stat"><b>${fmtMinutes(stat ? stat.helpedMinutes : 0)}</b><span>Tiempo apoyado</span></div>
+      </div>
+      <div style="max-height:52vh;overflow-y:auto;padding-right:4px">
+        ${rowsHtml}
+      </div>
+      <div class="sheet-actions">
+        <span class="spacer"></span>
+        <button type="button" class="btn btn-primary" data-action="close-sheet">Cerrar</button>
+      </div>
+    </div>
+  `);
 }
 
 function viewToday() {
@@ -1884,8 +2083,12 @@ function viewBoard() {
     }
 
     const items = sortTasks(list.filter((t) => t.status === s));
+    const reschedAllBtn = (s === 'faltante' && items.length > 0 && isLead())
+      ? `<div style="margin-bottom:8px"><button type="button" class="btn btn-sm btn-ghost" style="width:100%" data-action="reschedule-all-faltantes">📅 Reprogramar las ${items.length} faltantes para hoy</button></div>`
+      : '';
     return `<section class="col" data-status="${s}">
       <div class="col-head"><span>${STATUS[s]}</span><span class="count">${items.length}</span></div>
+      ${reschedAllBtn}
       ${taskList(items, 'Sin tareas aquí.')}
     </section>`;
   }).join('');
@@ -1896,7 +2099,10 @@ function viewBoard() {
   }).join('');
 
   return `
-  <div class="page-head"><div><h1>Tablero del equipo</h1><p class="muted" style="margin:4px 0 0">Control en tiempo real de avance, cargas y ayudas.</p></div></div>
+  <div class="page-head">
+    <div><h1>Tablero del equipo</h1><p class="muted" style="margin:4px 0 0">Control en tiempo real de avance, cargas y ayudas.</p></div>
+    <button class="btn btn-sm btn-primary" data-action="open-stats">📈 Estadísticas y Excel</button>
+  </div>
   ${helps.length ? `<div class="section help-list" style="margin-top:0"><div class="section-head"><h2>🆘 Piden ayuda <span class="count">${helps.length}</span></h2></div>${taskList(helps, '')}</div>` : ''}
   ${renderCompanerismoCard()}
   <div class="section"><div class="section-head"><h2>${ICON.users} Carga del equipo</h2>
@@ -1984,19 +2190,119 @@ const fmtNum = (n) => (n === null || n === undefined ? '—' : Number(n).toLocal
 
 function viewActivity() {
   const f = state.filters;
-  const items = state.activity.map((a) => `
+  const today = todayStr();
+
+  // 1. Calcular personas activas hoy (combinando bitácora de activity de hoy + last_login de hoy en users)
+  const todayMap = new Map();
+  for (const u of state.users) {
+    if (u.last_login) {
+      const d = parseLocal(u.last_login);
+      if (d && dateStr(d) === today) {
+        todayMap.set(u.name, d);
+      }
+    }
+  }
+  for (const a of state.activity) {
+    if (!a.user_name || a.user_name === 'Sistema') continue;
+    const d = parseLocal(a.created_at);
+    if (d && dateStr(d) === today) {
+      const prev = todayMap.get(a.user_name);
+      if (!prev || d > prev) todayMap.set(a.user_name, d);
+    }
+  }
+  const activeTodayList = Array.from(todayMap.entries())
+    .map(([name, lastDate]) => ({ name, lastDate }))
+    .sort((a, b) => b.lastDate - a.lastDate);
+
+  // 2. Resumen de ingresos / personas activas por día (últimos 7 días con registros)
+  const byDayMap = new Map();
+  for (const a of state.activity) {
+    if (!a.user_name || a.user_name === 'Sistema') continue;
+    const d = parseLocal(a.created_at);
+    if (!d) continue;
+    const dayKey = dateStr(d);
+    if (!byDayMap.has(dayKey)) byDayMap.set(dayKey, new Set());
+    byDayMap.get(dayKey).add(a.user_name);
+  }
+  for (const u of state.users) {
+    if (!u.last_login) continue;
+    const d = parseLocal(u.last_login);
+    if (!d) continue;
+    const dayKey = dateStr(d);
+    if (!byDayMap.has(dayKey)) byDayMap.set(dayKey, new Set());
+    byDayMap.get(dayKey).add(u.name);
+  }
+  const recentDays = Array.from(byDayMap.entries())
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .slice(0, 7);
+
+  const dayRowsHtml = recentDays.map(([dayKey, namesSet]) => {
+    const dObj = parseLocal(dayKey);
+    const label = dObj
+      ? dObj.toLocaleDateString('es-CO', { timeZone: TIMEZONE, weekday: 'short', day: 'numeric', month: 'short' })
+      : dayKey;
+    const names = Array.from(namesSet).sort();
+    return `
+      <div class="user-row" style="padding:8px 0">
+        <div class="u-body">
+          <b style="text-transform:capitalize">${esc(label)} ${dayKey === today ? '<span class="pill st-terminada" style="font-size:11px">Hoy</span>' : ''}</b>
+          <div class="small muted">${names.map(esc).join(', ')}</div>
+        </div>
+        <span class="pill st-en_progreso" style="font-weight:700">${names.length} persona${names.length === 1 ? '' : 's'}</span>
+      </div>`;
+  }).join('');
+
+  // 3. Filtrar lista de eventos por tipo de acción
+  let filteredActivity = state.activity;
+  if (f.activityKind === 'login') {
+    filteredActivity = filteredActivity.filter((a) => a.action === 'login');
+  } else if (f.activityKind === 'tareas') {
+    filteredActivity = filteredActivity.filter((a) => a.action !== 'login');
+  }
+
+  const items = filteredActivity.map((a) => `
     <div class="feed-item"><span class="avatar sm">${esc(initials(a.user_name))}</span>
       <div class="f-body"><b>${esc(a.user_name)}</b> ${esc(lowerFirst(a.summary))}<time>${fmtDateTime(a.created_at)}</time></div></div>`).join('');
+
   return `
-  <div class="page-head"><div><h1>Actividad</h1><p class="muted" style="margin:4px 0 0">Auditoría completa de movimientos.</p></div></div>
-  <div class="filters"><select data-filter="activityUser"><option value="">Todas las personas</option>
-    ${state.users.map((u) => `<option value="${u.id}" ${f.activityUser === String(u.id) ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select></div>
-  <div class="card">${items || '<div class="muted">Sin actividad registrada.</div>'}</div>`;
+  <div class="page-head">
+    <div><h1>Actividad e Ingresos</h1><p class="muted" style="margin:4px 0 0">Asistencia diaria automática (incluso con sesión iniciada) y auditoría de movimientos.</p></div>
+    <button class="btn btn-sm btn-primary" data-action="open-stats">📈 Estadísticas y Excel</button>
+  </div>
+  <div class="today-grid" style="margin-bottom:14px">
+    <div class="card">
+      <div class="row" style="justify-content:space-between;margin-bottom:8px">
+        <b>🟢 Personas que han entrado hoy</b>
+        <span class="pill st-terminada">${activeTodayList.length} hoy</span>
+      </div>
+      ${activeTodayList.length
+        ? `<div class="chips">${activeTodayList.map((p) => {
+            const hm = getBogotaParts(p.lastDate);
+            return `<span class="chip" style="cursor:default"><b>${esc(p.name)}</b> <span class="muted small">(${hm.hour}:${hm.minute})</span></span>`;
+          }).join('')}</div>`
+        : '<p class="small muted" style="margin:0">Nadie ha registrado actividad todavía hoy.</p>'}
+    </div>
+    <div class="card">
+      <b>📅 Personas activas por día (últimos 7 días)</b>
+      <div style="margin-top:6px">${dayRowsHtml || '<p class="small muted">Sin datos recientes.</p>'}</div>
+    </div>
+  </div>
+  <div class="filters" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+    <select data-filter="activityUser"><option value="">Todas las personas</option>
+      ${state.users.map((u) => `<option value="${u.id}" ${f.activityUser === String(u.id) ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>
+    <select data-filter="activityKind">
+      <option value="" ${!f.activityKind ? 'selected' : ''}>Todos los movimientos</option>
+      <option value="login" ${f.activityKind === 'login' ? 'selected' : ''}>🚪 Solo ingresos a la app</option>
+      <option value="tareas" ${f.activityKind === 'tareas' ? 'selected' : ''}>☑️ Solo acciones en tareas y objetivos</option>
+    </select>
+  </div>
+  <div class="card">${items || '<div class="muted">Sin actividad registrada para este filtro.</div>'}</div>`;
 }
 const lowerFirst = (s) => (s ? s[0].toLowerCase() + s.slice(1) : '');
 
 function viewMore() {
   if (state.more === 'equipo') return viewUsers();
+  if (state.more === 'estadisticas') return viewStats();
   if (state.more === 'papelera') return viewTrash();
   if (state.more === 'guia') return viewGuide();
   if (state.more === 'instalar') return viewInstallGuide();
@@ -2023,6 +2329,7 @@ function viewMore() {
     <button class="btn btn-sm btn-ghost" data-action="open-shift-summary">${ICON.clipboard} Resumen</button>
   </div>
   <div class="card menu-list" style="padding:0;margin-top:14px">
+    <button data-action="more" data-sub="estadisticas" style="color:var(--blue);font-weight:700">${ICON.activity} 📈 Estadísticas del mes y Reportes Excel/CSV</button>
     <button data-action="toggle-notifications">${notifLabel}</button>
     <button data-action="toggle-notif-mode">${ICON.target} Filtro de alertas <span class="pill st-en_progreso" style="margin-left:auto;font-size:11px">${notifModeLabel}</span></button>
     <button data-action="test-notification" style="color:var(--blue);font-weight:600">${ICON.bell} Probar notificación ahora</button>
@@ -2105,7 +2412,7 @@ function viewUsers() {
   }).join('');
   return `
   <div class="page-head"><div><h1>Equipo y compañerismo</h1><p class="muted" style="margin:4px 0 0">${activeUsers().length} personas activas</p></div>${backBtn()}</div>
-  ${renderCompanerismoCard()}
+  ${renderCompanerismoCard(true)}
   <div class="card">${rows}</div>`;
 }
 
@@ -2127,6 +2434,322 @@ function viewTrash() {
   ${isLead() ? block('Objetivos', 'objectives', objs) + block('Rutinas diarias', 'routines', routines) : ''}`;
 }
 
+
+function getStatsPeriodCutoff(period) {
+  const now = new Date();
+  if (period === '7d') return new Date(now.getTime() - 7 * 864e5);
+  if (period === '30d') return new Date(now.getTime() - 30 * 864e5);
+  if (period === 'month') {
+    const p = getBogotaParts(now);
+    return new Date(`${p.year}-${p.month}-01T00:00:00-05:00`);
+  }
+  return null;
+}
+
+function downloadCsvFile(filename, rows) {
+  const csvContent = '\uFEFF' + rows.map((r) =>
+    r.map((cell) => {
+      const s = String(cell ?? '').replace(/"/g, '""');
+      return /[",\n;]/.test(s) ? `"${s}"` : s;
+    }).join(',')
+  ).join('\r\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 500);
+}
+
+function exportTasksCSV() {
+  const all = state.tasks.filter((t) => t.active && !t.is_private);
+  const rows = [
+    ['ID', 'Titulo', 'Estado', 'Zona_Deporte', 'Prioridad', 'Responsable', 'Ayudantes', 'Finalizada_Por', 'Minutos_Estimados', 'Fecha_Limite', 'Fecha_Creacion', 'Fecha_Finalizacion', 'Subtareas_Completadas', 'Objetivo']
+  ];
+  for (const t of all) {
+    const subs = getSubtasks(t);
+    const subStr = subs.length ? `${subs.filter((s) => s.done).length}/${subs.length}` : '0/0';
+    const helpersNames = getHelperIds(t).map((id) => userName(id)).join(' | ');
+    const obj = t.objective_id ? objById(t.objective_id) : null;
+    rows.push([
+      t.id,
+      t.title,
+      STATUS[t.status] || t.status,
+      getTaskZone(t) || 'General',
+      PRIORITY[t.priority] || t.priority,
+      t.assignee_id ? userName(t.assignee_id) : 'Sin asignar',
+      helpersNames,
+      t.completed_by ? userName(t.completed_by) : '',
+      t.estimated_minutes || 0,
+      t.due_at ? fmtDateTime(t.due_at) : '',
+      t.created_at ? fmtDateTime(t.created_at) : '',
+      t.completed_at ? fmtDateTime(t.completed_at) : '',
+      subStr,
+      obj ? obj.title : ''
+    ]);
+  }
+  downloadCsvFile(`reporte_tareas_${todayStr()}.csv`, rows);
+  toast('📥 Reporte de tareas descargado (.CSV compatible con Excel)', 'ok');
+}
+
+function exportActivityCSV() {
+  const byDayPerson = new Map();
+  for (const a of state.activity) {
+    if (!a.user_name || a.user_name === 'Sistema') continue;
+    const d = parseLocal(a.created_at);
+    if (!d) continue;
+    const day = dateStr(d);
+    const month = day.slice(0, 7) + '-01';
+    const key = `${day}__${a.user_name}`;
+    byDayPerson.set(key, {
+      month,
+      day,
+      person: a.user_name,
+      count: (byDayPerson.get(key)?.count || 0) + 1
+    });
+  }
+  const summaryRows = [
+    ['month', 'day', 'person', 'activity_count'],
+    ...Array.from(byDayPerson.values())
+      .sort((a, b) => a.day.localeCompare(b.day) || a.person.localeCompare(b.person))
+      .map((x) => [x.month, x.day, x.person, x.count])
+  ];
+  downloadCsvFile(`reporte_actividad_diaria_${todayStr()}.csv`, summaryRows);
+  toast('📥 Reporte de actividad diaria descargado (.CSV)', 'ok');
+}
+
+function viewStats() {
+  const period = state.statsPeriod || '30d';
+  const cutoff = getStatsPeriodCutoff(period);
+  const allPublic = state.tasks.filter((t) => t.active && !t.is_private);
+
+  const tasksInPeriod = allPublic.filter((t) => {
+    if (!cutoff) return true;
+    const refD = parseLocal(t.completed_at || t.due_at || t.created_at);
+    return !refD || refD >= cutoff;
+  });
+
+  const doneTasks = tasksInPeriod.filter((t) => t.status === 'terminada');
+  const openTasks = tasksInPeriod.filter((t) => isOpen(t));
+  const faltanteTasks = allPublic.filter((t) => t.status === 'faltante' || (isOpen(t) && urgency(t).level === 'overdue'));
+
+  // Cumplimiento a tiempo: terminadas antes o en el mismo día de su due_at
+  const doneWithDue = doneTasks.filter((t) => t.due_at && t.completed_at);
+  const doneOnTime = doneWithDue.filter((t) => {
+    const dueD = parseLocal(t.due_at);
+    const compD = parseLocal(t.completed_at);
+    return dueD && compD && (compD.getTime() <= dueD.getTime() + 3600 * 1000 || dateStr(compD) <= dateStr(dueD));
+  });
+  const onTimePct = doneWithDue.length ? Math.round((doneOnTime.length / doneWithDue.length) * 100) : 100;
+  const totalExecMinutes = doneTasks.reduce((s, t) => s + (t.estimated_minutes || 0), 0);
+
+  // Construir serie de actividad diaria por persona (Eje Y: actividad, Eje X: tiempo)
+  const actInPeriod = state.activity.filter((a) => {
+    if (!a.user_name || a.user_name === 'Sistema') return false;
+    if (!cutoff) return true;
+    const d = parseLocal(a.created_at);
+    return !d || d >= cutoff;
+  });
+
+  const CHART_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316', '#84cc16', '#ef4444'];
+  const peopleNames = activeUsers().map((u) => u.name);
+  const colorMap = {};
+  peopleNames.forEach((n, idx) => { colorMap[n] = CHART_COLORS[idx % CHART_COLORS.length]; });
+
+  const datesSet = new Set();
+  const dataByDate = {};
+  const personActTotals = {};
+  peopleNames.forEach((n) => { personActTotals[n] = 0; });
+
+  for (const a of actInPeriod) {
+    const d = parseLocal(a.created_at);
+    if (!d) continue;
+    const day = dateStr(d);
+    datesSet.add(day);
+    if (!dataByDate[day]) dataByDate[day] = {};
+    dataByDate[day][a.user_name] = (dataByDate[day][a.user_name] || 0) + 1;
+    personActTotals[a.user_name] = (personActTotals[a.user_name] || 0) + 1;
+  }
+
+  const sortedDates = Array.from(datesSet).sort();
+  const selectedPerson = state.statsChartPerson || '';
+  const fillZeros = state.statsChartZero !== false;
+
+  // Renderizar SVG de la gráfica lineal en vivo
+  let svgChartHtml = '';
+  if (sortedDates.length < 2) {
+    svgChartHtml = `<div class="empty">Cargando historial de actividad o aún hay menos de 2 días en este rango…</div>`;
+  } else {
+    const W = 800, H = 240;
+    const padL = 36, padR = 16, padT = 14, padB = 36;
+    const plotW = W - padL - padR;
+    const plotH = H - padT - padB;
+    let maxVal = 5;
+    for (const d of sortedDates) {
+      for (const p of peopleNames) {
+        if (selectedPerson && p !== selectedPerson) continue;
+        const v = (dataByDate[d] && dataByDate[d][p]) || 0;
+        if (v > maxVal) maxVal = v;
+      }
+    }
+    maxVal = Math.ceil(maxVal / 5) * 5;
+    const xOf = (i) => padL + (i / (sortedDates.length - 1)) * plotW;
+    const yOf = (v) => padT + plotH - (v / maxVal) * plotH;
+
+    let svgInner = '';
+    for (let step = 0; step <= 4; step++) {
+      const val = Math.round((maxVal / 4) * step);
+      const y = yOf(val);
+      svgInner += `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="var(--line)" stroke-dasharray="${val === 0 ? '' : '3,3'}" stroke-width="1"/>`;
+      svgInner += `<text x="${padL - 6}" y="${y + 4}" text-anchor="end" fill="var(--muted)" font-size="11">${val}</text>`;
+    }
+
+    const labelStep = Math.max(1, Math.floor(sortedDates.length / 7));
+    sortedDates.forEach((d, idx) => {
+      if (idx % labelStep === 0 || idx === sortedDates.length - 1) {
+        const x = xOf(idx);
+        const shortLbl = d.slice(5); // MM-DD
+        svgInner += `<text x="${x}" y="${padT + plotH + 20}" text-anchor="middle" fill="var(--muted)" font-size="11">${shortLbl}</text>`;
+      }
+    });
+
+    peopleNames.forEach((p) => {
+      if (selectedPerson && p !== selectedPerson) return;
+      const color = colorMap[p] || '#3b82f6';
+      const pts = [];
+      sortedDates.forEach((d, idx) => {
+        const v = dataByDate[d] ? dataByDate[d][p] : undefined;
+        if (v !== undefined) pts.push({ x: xOf(idx), y: yOf(v), v, d });
+        else if (fillZeros) pts.push({ x: xOf(idx), y: yOf(0), v: 0, d });
+      });
+      if (pts.length > 1) {
+        const dPath = pts.map((pt, i) => `${i === 0 ? 'M' : 'L'}${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(' ');
+        svgInner += `<path d="${dPath}" fill="none" stroke="${color}" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/>`;
+      }
+      pts.forEach((pt) => {
+        if (pt.v > 0) {
+          svgInner += `<circle cx="${pt.x.toFixed(1)}" cy="${pt.y.toFixed(1)}" r="3.5" fill="${color}" stroke="var(--card)" stroke-width="1.3"><title>${esc(p)} · ${pt.d}: ${pt.v} mov.</title></circle>`;
+        }
+      });
+    });
+
+    svgChartHtml = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;overflow:visible">${svgInner}</svg>`;
+  }
+
+  // Productividad por colaborador
+  const compMap = new Map(getCompanerismoStats().map((s) => [s.user.id, s]));
+  const userRowsStats = activeUsers().map((u) => {
+    const ownDone = doneTasks.filter((t) => t.assignee_id === u.id || (t.completed_by === u.id && !t.assignee_id)).length;
+    const ownOpen = openTasks.filter((t) => t.assignee_id === u.id).length;
+    const comp = compMap.get(u.id);
+    const supportsDone = comp ? comp.doneHelped : 0;
+    const minsExec = doneTasks
+      .filter((t) => t.assignee_id === u.id || t.completed_by === u.id || getHelperIds(t).includes(u.id))
+      .reduce((s, t) => s + (t.estimated_minutes || 0), 0);
+    const actCount = personActTotals[u.name] || 0;
+    return { u, ownDone, ownOpen, supportsDone, minsExec, actCount, totalImpact: ownDone + supportsDone };
+  }).sort((a, b) => b.totalImpact - a.totalImpact || b.actCount - a.actCount);
+
+  const maxImpact = Math.max(1, ...userRowsStats.map((r) => r.totalImpact));
+
+  // Distribución por Zona / Deporte
+  const zoneBuckets = [...ZONES.map((z) => ({ id: z.id, label: z.label })), { id: '', label: '📋 General / Sin zona' }];
+  const zoneRowsHtml = zoneBuckets.map((zb) => {
+    const zTasks = tasksInPeriod.filter((t) => getTaskZone(t) === zb.id);
+    if (!zTasks.length) return '';
+    const zDone = zTasks.filter((t) => t.status === 'terminada').length;
+    const pct = Math.round((zDone / zTasks.length) * 100);
+    return `
+      <div style="margin-bottom:10px">
+        <div class="row" style="justify-content:space-between;font-size:13.5px;margin-bottom:4px">
+          <b>${esc(zb.label)}</b>
+          <span class="muted small"><b>${zDone}</b> / ${zTasks.length} terminadas (${pct}%)</span>
+        </div>
+        <div class="bar"><i class="${pct >= 80 ? 'good' : pct >= 50 ? 'warn' : ''}" style="width:${pct}%"></i></div>
+      </div>`;
+  }).filter(Boolean).join('');
+
+  return `
+  <div class="page-head">
+    <div><h1>📈 Estadísticas y Productividad</h1><p class="muted" style="margin:4px 0 0">Rendimiento del equipo, gráfica lineal de actividad y descarga para Excel.</p></div>
+    ${backBtn()}
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:10px">
+      <div class="done-filter-bar" style="margin:0">
+        <button class="done-pill ${period === '7d' ? 'active' : ''}" data-action="set-stats-period" data-period="7d">Últimos 7 días</button>
+        <button class="done-pill ${period === '30d' ? 'active' : ''}" data-action="set-stats-period" data-period="30d">Últimos 30 días</button>
+        <button class="done-pill ${period === 'month' ? 'active' : ''}" data-action="set-stats-period" data-period="month">Este mes</button>
+        <button class="done-pill ${period === 'all' ? 'active' : ''}" data-action="set-stats-period" data-period="all">Todo el historial</button>
+      </div>
+      <div class="row" style="gap:8px;flex-wrap:wrap">
+        <button class="btn btn-sm btn-success" data-action="export-tasks-csv">${ICON.download} Descargar Tareas (Excel/CSV)</button>
+        <button class="btn btn-sm btn-primary" data-action="export-activity-csv">${ICON.download} Descargar Actividad Diaria (CSV)</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat good"><b>${doneTasks.length}</b><span>Tareas terminadas</span></div>
+    <div class="stat ${onTimePct >= 80 ? 'good' : ''}"><b>${onTimePct}%</b><span>Cumplimiento a tiempo</span></div>
+    <div class="stat ${faltanteTasks.length ? 'alert' : ''}"><b>${faltanteTasks.length}</b><span>Faltantes / Vencidas</span></div>
+    <div class="stat"><b>${fmtMinutes(totalExecMinutes)}</b><span>Tiempo ejecutado</span></div>
+  </div>
+
+  <!-- Gráfica lineal en vivo -->
+  <div class="card" style="margin-top:14px">
+    <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+      <div>
+        <h3 style="margin:0;font-size:15.5px">📈 Gráfica lineal de actividad diaria por persona</h3>
+        <p class="small muted" style="margin:2px 0 0">Eje Y: Registros de actividad en la app · Eje X: Fecha. Toca un colaborador para aislar su línea.</p>
+      </div>
+      <button type="button" class="btn btn-sm btn-ghost" data-action="stats-chart-zero">
+        ${fillZeros ? 'Modo: Con ceros en días inactivos' : 'Modo: Conectar días activos'}
+      </button>
+    </div>
+    <div class="chips" style="margin-bottom:12px">
+      <button type="button" class="chip ${!selectedPerson ? 'active-chip' : ''}" data-action="stats-chart-person" data-person="">Ver todos</button>
+      ${peopleNames.map((n) => `
+        <button type="button" class="chip ${selectedPerson === n ? 'active-chip' : ''}" data-action="stats-chart-person" data-person="${esc(n)}">
+          <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${colorMap[n]};margin-right:4px"></span>
+          ${esc(n)} <span class="muted small">(${personActTotals[n] || 0})</span>
+        </button>
+      `).join('')}
+    </div>
+    ${svgChartHtml}
+  </div>
+
+  <div class="today-grid" style="margin-top:14px">
+    <div class="card">
+      <h3 style="margin:0 0 10px;font-size:15.5px">🏅 Productividad por colaborador</h3>
+      ${userRowsStats.map((r) => `
+        <div style="padding:10px 0;border-bottom:1px solid var(--line)">
+          <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:6px">
+            <div class="row"><span class="avatar sm">${esc(initials(r.u.name))}</span><b>${esc(r.u.name)}</b></div>
+            <div class="row" style="gap:6px;flex-wrap:wrap">
+              <span class="pill st-terminada">✓ ${r.ownDone} propias</span>
+              <span class="pill st-en_progreso">🤝 ${r.supportsDone} apoyos</span>
+              <span class="pill">${r.actCount} mov.</span>
+            </div>
+          </div>
+          <div class="bar" style="margin-top:6px"><i class="good" style="width:${Math.round((r.totalImpact / maxImpact) * 100)}%"></i></div>
+          <div class="small muted" style="margin-top:4px">${fmtMinutes(r.minsExec)} completados · ${r.ownOpen} abiertas actualmente</div>
+        </div>
+      `).join('')}
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 10px;font-size:15.5px">🏷️ Avance por Zona / Deporte</h3>
+      ${zoneRowsHtml || '<p class="muted small">Aún no hay tareas clasificadas en este periodo.</p>'}
+    </div>
+  </div>`;
+}
 
 function viewGuide() {
   return `
@@ -2258,13 +2881,23 @@ function openTaskSheet(t) {
       <div id="draft-photos-list" class="photos-grid"></div>
     </div>
 
-    <!-- Ayudantes / Apoyos -->
+    <!-- Ayudantes / Apoyos y Modo Grupal -->
     <div class="helpers-box">
-      <span style="font-size:13px;font-weight:600;color:var(--muted)">🤝 Colaboradores en apoyo / Ayudantes:</span>
+      <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:8px">
+        <span style="font-size:13px;font-weight:600;color:var(--muted)">🤝 Colaboradores en apoyo / Tarea Grupal:</span>
+        <div class="row" style="gap:6px;flex-wrap:wrap">
+          <button type="button" class="btn btn-sm btn-ghost" style="min-height:28px;padding:3px 8px;font-size:12px" data-action="helpers-select-all">👥 Seleccionar todos</button>
+          <button type="button" class="btn btn-sm btn-ghost" style="min-height:28px;padding:3px 8px;font-size:12px" data-action="helpers-clear-all">Limpiar</button>
+          <button type="button" class="btn btn-sm btn-primary" style="min-height:28px;padding:3px 10px;font-size:12px" data-action="helpers-generate-checks">☑️ Crear casilla por persona</button>
+        </div>
+      </div>
       <div class="helpers-checkboxes">
         ${helpersCheckboxes || '<span class="small muted">No hay colaboradores disponibles.</span>'}
       </div>
-      <p class="small muted" style="margin:6px 0 0">Puedes seleccionar varias personas para trabajar en esta tarea.</p>
+      <label class="check" style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--line)">
+        <input type="checkbox" id="group-auto-checks" name="group_auto_checks">
+        <span class="small"><b>👥 Modo Tarea Grupal:</b> crear una casilla de avance individual por cada participante seleccionado (la tarea se finaliza cuando todos marquen su parte).</span>
+      </label>
     </div>
 
     <div class="field"><span>Tiempo estimado (minutos)</span>
@@ -2617,6 +3250,118 @@ document.addEventListener('click', async (e) => {
     case 'noop':
       e.stopPropagation();
       break;
+    case 'open-companerismo-detail':
+      if (id) openCompanerismoDetailSheet(id);
+      break;
+    case 'open-stats':
+      state.view = 'mas';
+      state.more = 'estadisticas';
+      localStorage.setItem('obj_view', 'mas');
+      render();
+      window.scrollTo(0, 0);
+      loadActivity().catch((err) => toast(err.message, 'error'));
+      break;
+    case 'set-stats-period':
+      state.statsPeriod = el.dataset.period || '30d';
+      render();
+      break;
+    case 'stats-chart-person':
+      state.statsChartPerson = state.statsChartPerson === (el.dataset.person || '') ? '' : (el.dataset.person || '');
+      render();
+      break;
+    case 'stats-chart-zero':
+      state.statsChartZero = !state.statsChartZero;
+      render();
+      break;
+    case 'export-tasks-csv':
+      exportTasksCSV();
+      break;
+    case 'export-activity-csv':
+      exportActivityCSV();
+      break;
+    case 'helpers-select-all': {
+      const form = el.closest('form');
+      if (!form) break;
+      form.querySelectorAll('input[name="helper_ids"]').forEach((cb) => {
+        cb.checked = true;
+        const lbl = cb.closest('.helper-check');
+        if (lbl) lbl.classList.add('checked');
+      });
+      break;
+    }
+    case 'helpers-clear-all': {
+      const form = el.closest('form');
+      if (!form) break;
+      form.querySelectorAll('input[name="helper_ids"]').forEach((cb) => {
+        cb.checked = false;
+        const lbl = cb.closest('.helper-check');
+        if (lbl) lbl.classList.remove('checked');
+      });
+      break;
+    }
+    case 'helpers-generate-checks': {
+      const form = el.closest('form');
+      if (!form) break;
+      const assigneeVal = Number(form.elements.assignee_id ? form.elements.assignee_id.value : 0);
+      const checkedHelperIds = Array.from(form.querySelectorAll('input[name="helper_ids"]:checked')).map((cb) => Number(cb.value));
+      const participantIds = Array.from(new Set([assigneeVal, ...checkedHelperIds].filter(Boolean)));
+      if (!participantIds.length) {
+        toast('Selecciona primero a los participantes o haz clic en "👥 Seleccionar todos".', 'error');
+        break;
+      }
+      let added = 0;
+      for (const uid of participantIds) {
+        const u = userById(uid);
+        if (!u) continue;
+        const already = state.draftSubtasks.some((s) => Number(s.user_id) === uid || String(s.text || '').toLowerCase().includes(u.name.toLowerCase()));
+        if (!already) {
+          state.draftSubtasks.push({
+            id: Date.now() + uid,
+            text: `👤 ${u.name} (completó su parte)`,
+            user_id: uid,
+            is_member_check: true,
+            done: false
+          });
+          added++;
+        }
+      }
+      renderDraftSubtasksList();
+      toast(added ? `☑️ Se crearon ${added} casillas individuales por participante` : 'Ya existen casillas para los participantes seleccionados', 'ok');
+      break;
+    }
+    case 'reschedule-today': {
+      e.stopPropagation();
+      const t = findItem('tasks', id);
+      if (!t) break;
+      const p = getBogotaParts(new Date());
+      const targetHour = Number(p.hour) >= DEFAULT_DUE_HOUR ? 23 : DEFAULT_DUE_HOUR;
+      const newDue = `${todayStr()}T${pad(targetHour)}:00:00-05:00`;
+      const patch = {
+        due_at: newDue,
+        updated_at: nowIso()
+      };
+      if (t.status === 'faltante') patch.status = 'sin_iniciar';
+      run(async () => {
+        await safeTaskUpdate(id, patch);
+        await logActivity('editar', 'tarea', id, `Reprogramó para hoy la tarea "${t.title}"`);
+      }, `📅 Reprogramada para hoy (${pad(targetHour)}:00)`);
+      break;
+    }
+    case 'reschedule-all-faltantes': {
+      const faltantes = activeTasks().filter((t) => !t.is_private && t.status === 'faltante');
+      if (!faltantes.length) break;
+      if (!confirm(`¿Reprogramar las ${faltantes.length} tarea(s) faltante(s) para hoy a las ${pad(DEFAULT_DUE_HOUR)}:00?`)) break;
+      const p = getBogotaParts(new Date());
+      const targetHour = Number(p.hour) >= DEFAULT_DUE_HOUR ? 23 : DEFAULT_DUE_HOUR;
+      const newDue = `${todayStr()}T${pad(targetHour)}:00:00-05:00`;
+      run(async () => {
+        for (const t of faltantes) {
+          await safeTaskUpdate(t.id, { status: 'sin_iniciar', due_at: newDue, updated_at: nowIso() });
+        }
+        await logActivity('editar', 'tarea', null, `Reprogramó ${faltantes.length} tareas faltantes para hoy`);
+      }, `📅 ${faltantes.length} tareas reprogramadas para hoy`);
+      break;
+    }
     case 'nav':
       state.view = el.dataset.view;
       if (state.view === 'mas') state.more = 'menu';
@@ -2626,7 +3371,11 @@ document.addEventListener('click', async (e) => {
       if (state.view === 'actividad') loadActivity().catch((err) => toast(err.message, 'error'));
       break;
     case 'more':
-      state.more = el.dataset.sub; render(); window.scrollTo(0, 0); break;
+      state.more = el.dataset.sub;
+      render();
+      window.scrollTo(0, 0);
+      if (state.more === 'estadisticas') loadActivity().catch((err) => toast(err.message, 'error'));
+      break;
     case 'toggle-theme':
       toggleTheme();
       break;
@@ -2682,8 +3431,28 @@ document.addEventListener('click', async (e) => {
       const t = findItem('tasks', id);
       if (!t) break;
       const idx = Number(el.dataset.idx);
-      const subtasks = getSubtasks(t).map((s, i) => (i === idx ? { ...s, done: !s.done } : s));
-      await safeTaskUpdate(id, { subtasks, updated_at: nowIso() });
+      const subtasks = getSubtasks(t).map((s, i) => (i === idx ? { ...s, done: !s.done, done_by: state.me ? state.me.name : '', done_at: nowIso() } : s));
+      const patch = { subtasks, updated_at: nowIso() };
+      const allSubsDone = subtasks.length > 0 && subtasks.every((s) => s.done);
+      const anySubDone = subtasks.some((s) => s.done);
+      const hasMemberChecks = subtasks.some((s) => s.is_member_check || /^👤\s/.test(s.text || ''));
+
+      if (allSubsDone && hasMemberChecks && t.status !== 'terminada') {
+        patch.status = 'terminada';
+        patch.completed_at = nowIso();
+        patch.completed_by = state.me ? state.me.id : null;
+        patch.needs_help = false;
+        markNotificationTagHandled(`done-${id}-terminada`);
+        await safeTaskUpdate(id, patch);
+        await logActivity('editar', 'tarea', id, `Completó el último paso grupal y finalizó "${t.title}"`);
+        toast('🎉 ¡Todos completaron su parte! Tarea grupal finalizada.', 'ok');
+      } else {
+        if (anySubDone && t.status === 'sin_iniciar') {
+          patch.status = 'en_progreso';
+          if (!t.started_at) patch.started_at = nowIso();
+        }
+        await safeTaskUpdate(id, patch);
+      }
       render();
       break;
     }
@@ -3229,14 +3998,27 @@ document.addEventListener('submit', async (e) => {
   }
 
   if (kind === 'task') {
+    const existingTask = id ? findItem('tasks', id) : null;
     const data = Object.fromEntries(fd.entries());
     // Eliminar campos auxiliares del formulario que no son columnas de DB
     delete data.photo_label;
+    delete data.group_auto_checks;
     data.needs_help = form.elements.needs_help.checked;
     if (!data.needs_help) data.help_note = '';
 
+    // Si quien edita es un ayudante/responsable sin permisos de edición completa, conservar campos deshabilitados
+    if (existingTask && !canFullEditTask(existingTask)) {
+      if (data.title === undefined) data.title = existingTask.title;
+      if (data.description === undefined) data.description = existingTask.description || '';
+      if (data.zone === undefined) data.zone = getTaskZone(existingTask);
+      if (data.objective_id === undefined) data.objective_id = existingTask.objective_id;
+      if (data.due_at === undefined) data.due_at = existingTask.due_at;
+      if (data.estimated_minutes === undefined) data.estimated_minutes = existingTask.estimated_minutes;
+      if (data.priority === undefined) data.priority = existingTask.priority;
+    }
+
     // Soporte para tareas privadas
-    data.is_private = form.elements.is_private ? form.elements.is_private.checked : false;
+    data.is_private = form.elements.is_private ? form.elements.is_private.checked : (existingTask ? Boolean(existingTask.is_private) : false);
 
     // Si es privada, se autoasigna al creador
     if (data.is_private) {
@@ -3254,6 +4036,26 @@ document.addEventListener('submit', async (e) => {
       state.draftSubtasks.push({ text: pendingSubInp.value.trim(), done: false });
     }
 
+    // Si activó el checkbox de "Modo Tarea Grupal", generar automáticamente casillas por participante seleccionado
+    const groupAutoChecks = form.elements.group_auto_checks && form.elements.group_auto_checks.checked;
+    if (groupAutoChecks && !data.is_private) {
+      const pIds = Array.from(new Set([Number(data.assignee_id || 0), ...(data.helper_ids || [])].filter(Boolean)));
+      for (const uid of pIds) {
+        const u = userById(uid);
+        if (!u) continue;
+        const already = state.draftSubtasks.some((s) => Number(s.user_id) === uid || String(s.text || '').toLowerCase().includes(u.name.toLowerCase()));
+        if (!already) {
+          state.draftSubtasks.push({
+            id: Date.now() + uid,
+            text: `👤 ${u.name} (completó su parte)`,
+            user_id: uid,
+            is_member_check: true,
+            done: false
+          });
+        }
+      }
+    }
+
     data.zone = data.zone || '';
     data.subtasks = state.draftSubtasks || [];
     data.photos = state.draftPhotos || [];
@@ -3267,6 +4069,21 @@ document.addEventListener('submit', async (e) => {
       if (data.due_at.length === 16) {
         data.due_at = data.due_at + ':00-05:00';
       }
+    }
+
+    // Registrar timestamps y quién finalizó la tarea cuando cambia de estado dentro del formulario
+    if (data.status === 'en_progreso' && (!existingTask || !existingTask.started_at)) {
+      data.started_at = nowIso();
+    }
+    if (data.status === 'terminada') {
+      if (!existingTask || existingTask.status !== 'terminada') {
+        data.completed_at = nowIso();
+        data.completed_by = state.me ? state.me.id : null;
+      }
+      data.needs_help = false;
+    } else if (existingTask && existingTask.status === 'terminada') {
+      data.completed_at = null;
+      data.completed_by = null;
     }
 
     data.estimated_minutes = Number(data.estimated_minutes) || 0;
@@ -3432,11 +4249,15 @@ function openPinVerifySheet(user) {
 
 async function completeLogin(user) {
   try {
+    const isoNow = nowIso();
     if (navigator.onLine && sb) {
-      await sb.from('users').update({ last_login: nowIso() }).eq('id', user.id);
+      await sb.from('users').update({ last_login: isoNow }).eq('id', user.id);
     }
+    user.last_login = isoNow;
     state.me = user;
     localStorage.setItem('obj_user', JSON.stringify(user));
+    localStorage.setItem(`obj_daily_entry_${user.id}`, todayStr());
+    localStorage.setItem(`obj_last_ping_${user.id}`, String(Date.now()));
     state.view = 'hoy';
     await logActivity('login', 'usuario', user.id, 'Entró a la aplicación');
     await refresh();

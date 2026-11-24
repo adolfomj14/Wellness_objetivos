@@ -889,6 +889,29 @@ input:disabled, select:disabled, textarea:disabled { background: var(--bg); colo
   font-family: monospace;
 }
 
+/* ---------- Modo Tarea Grupal y Estadísticas ---------- */
+.pill-group {
+  background: #EDE9FE;
+  color: #5B21B6;
+  border: 1px solid #DDD6FE;
+  font-weight: 700;
+}
+.subtask-row.is-mine {
+  background: var(--blue-50);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-weight: 600;
+  border: 1px solid rgba(54, 67, 186, 0.25);
+}
+.chip.active-chip {
+  background: var(--blue);
+  color: #fff;
+  border-color: var(--blue);
+}
+.chip.active-chip .muted {
+  color: rgba(255, 255, 255, 0.85);
+}
+
 /* ---------- Modo Oscuro (Dark Mode) ---------- */
 [data-theme="dark"] {
   --bg: #0F1322;
@@ -936,6 +959,7 @@ input:disabled, select:disabled, textarea:disabled { background: var(--bg); colo
 [data-theme="dark"] .prio-alta { background: rgba(240, 68, 56, 0.2); color: #FCA5A5; }
 [data-theme="dark"] .prio-baja { background: #262E48; color: #94A3B8; }
 [data-theme="dark"] .pill-zone { background: rgba(14, 165, 233, 0.2); color: #7DD3FC; border-color: rgba(14, 165, 233, 0.35); }
+[data-theme="dark"] .pill-group { background: rgba(139, 92, 246, 0.22); color: #DDD6FE; border-color: rgba(139, 92, 246, 0.45); }
 [data-theme="dark"] .pill-private { background: rgba(147, 51, 234, 0.25); color: #E9D5FF; border-color: rgba(147, 51, 234, 0.45); }
 [data-theme="dark"] .task.is-private { background: #1D1836; }
 [data-theme="dark"] .private-tasks-section { background: #16142B; border-color: #581C87; }
